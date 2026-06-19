@@ -1,0 +1,6 @@
+{
+  "name": "StockDepo Sabatto",
+  "description": "CAPS Pharmacy Supply Depot Management System with FEFO batch suggestions and role-based access control.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
