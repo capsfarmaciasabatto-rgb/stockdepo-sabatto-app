@@ -659,6 +659,7 @@ export default function App() {
             </div>
 
             {renderRoleView()}
+            <TestFirebase />
           </main>
 
         </div>
