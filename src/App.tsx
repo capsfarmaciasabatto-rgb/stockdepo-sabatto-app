@@ -57,30 +57,15 @@ export default function App() {
 
   // --- INITIALIZE APPLICATION & PERSISTENCE ---
 useEffect(() => {
-    async function loadData() {
-      // 1. Cargar base de datos local primero
-      const state = initializeDB();
-      
-      // 2. Intentar cargar pedidos desde Firebase
-      try {
-        const firebaseOrders = await getOrdersFromFirebase();
-        if (firebaseOrders.length > 0) {
-          // Si hay pedidos en Firebase, usarlos
-          setDbState({
-            ...state,
-            orders: firebaseOrders
-          });
-        } else {
-          // Si no hay pedidos en Firebase, usar local
-          setDbState(state);
-        }
-      } catch (error) {
-        console.error('Error cargando desde Firebase:', error);
-        setDbState(state);
-      }
-    }
+    const state = initializeDB();
     
-    loadData();
+    // Escuchar pedidos en tiempo real desde Firebase
+    const unsubscribe = listenToOrders((firebaseOrders) => {
+      setDbState({
+        ...state,
+        orders: firebaseOrders
+      });
+    });
 
     // Cargar preferencias de usuario de localStorage
     const savedUser = localStorage.getItem('sabatto_current_user');
@@ -110,6 +95,9 @@ useEffect(() => {
     if (savedSortOrder === 'name-asc' || savedSortOrder === 'name-desc' || savedSortOrder === 'type-med' || savedSortOrder === 'type-pm') {
       setProductSortOrder(savedSortOrder);
     }
+      return () => {
+      unsubscribe();
+    };
   }, []);
 
   useEffect(() => {
