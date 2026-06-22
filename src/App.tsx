@@ -15,6 +15,7 @@ import DirectorView from './components/RoleViews/DirectorView';
 import { playBeep } from './lib/sound';
 import { Activity } from 'lucide-react';
 import { saveOrderToFirebase } from './lib/firebaseUtils';
+import { getOrdersFromFirebase } from './lib/firebaseUtils';
 
 export default function App() {
   // --- CORE SYSTEM STATES ---
@@ -55,10 +56,31 @@ export default function App() {
   const isLastBusinessDayActive = isLastBusinessDayOfMonth() || simulateLastBusinessDay;
 
   // --- INITIALIZE APPLICATION & PERSISTENCE ---
-  useEffect(() => {
-    // Cargar base de datos local
-    const state = initializeDB();
-    setDbState(state);
+useEffect(() => {
+    async function loadData() {
+      // 1. Cargar base de datos local primero
+      const state = initializeDB();
+      
+      // 2. Intentar cargar pedidos desde Firebase
+      try {
+        const firebaseOrders = await getOrdersFromFirebase();
+        if (firebaseOrders.length > 0) {
+          // Si hay pedidos en Firebase, usarlos
+          setDbState({
+            ...state,
+            orders: firebaseOrders
+          });
+        } else {
+          // Si no hay pedidos en Firebase, usar local
+          setDbState(state);
+        }
+      } catch (error) {
+        console.error('Error cargando desde Firebase:', error);
+        setDbState(state);
+      }
+    }
+    
+    loadData();
 
     // Cargar preferencias de usuario de localStorage
     const savedUser = localStorage.getItem('sabatto_current_user');
