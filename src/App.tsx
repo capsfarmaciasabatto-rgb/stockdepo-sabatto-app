@@ -14,6 +14,7 @@ import FarmaceuticoView from './components/RoleViews/FarmaceuticoView';
 import DirectorView from './components/RoleViews/DirectorView';
 import { playBeep } from './lib/sound';
 import { Activity } from 'lucide-react';
+import { saveOrderToFirebase } from './lib/firebaseUtils';
 
 export default function App() {
   // --- CORE SYSTEM STATES ---
