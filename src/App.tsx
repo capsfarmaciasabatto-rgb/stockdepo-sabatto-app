@@ -241,7 +241,7 @@ export default function App() {
   // --- OPERATIONS ON DB/STATE ---
   
   // Enfermero envía pedido
-  const handleSubmitOrder = (order: Order) => {
+  const handleSubmitOrder = async (order: Order) => {
     if (!dbState) return;
 
     const updatedOrders = [order, ...dbState.orders];
@@ -261,6 +261,12 @@ export default function App() {
 
     setDbState(updatedState);
     saveDBState(updatedState);
+    // Sincronizar con Firebase
+try {
+  await saveOrderToFirebase(order);
+} catch (error) {
+  console.error('Error sincronizando con Firebase:', error);
+}
 
     // Reproducir pitido de alarma nuevo pedido para el depósito
     playBeep('alert');
