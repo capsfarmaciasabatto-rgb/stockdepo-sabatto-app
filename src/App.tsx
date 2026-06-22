@@ -16,6 +16,7 @@ import { playBeep } from './lib/sound';
 import { Activity } from 'lucide-react';
 import { saveOrderToFirebase } from './lib/firebaseUtils';
 import { getOrdersFromFirebase } from './lib/firebaseUtils';
+import { listenToOrders } from './lib/firebaseUtils';
 
 export default function App() {
   // --- CORE SYSTEM STATES ---
