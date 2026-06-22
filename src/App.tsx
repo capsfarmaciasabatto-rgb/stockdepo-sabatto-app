@@ -14,7 +14,6 @@ import FarmaceuticoView from './components/RoleViews/FarmaceuticoView';
 import DirectorView from './components/RoleViews/DirectorView';
 import { playBeep } from './lib/sound';
 import { Activity } from 'lucide-react';
-import TestFirebase from './components/TestFirebase';
 
 export default function App() {
   // --- CORE SYSTEM STATES ---
@@ -659,7 +658,6 @@ export default function App() {
             </div>
 
             {renderRoleView()}
-            <TestFirebase />
           </main>
 
         </div>
