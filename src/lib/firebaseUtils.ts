@@ -1,5 +1,5 @@
 import { db } from '../firebase';
-import { collection, addDoc, getDocs, doc, updateDoc, deleteDoc } from 'firebase/firestore';
+import { collection, addDoc, getDocs, doc, updateDoc, deleteDoc, onSnapshot, query, orderBy } from 'firebase/firestore';
 
 // Guardar un pedido nuevo
 export async function saveOrderToFirebase(order: any) {
@@ -48,4 +48,17 @@ export async function deleteOrderFromFirebase(orderId: string) {
     console.error('Error eliminando pedido:', error);
     throw error;
   }
+}
+
+// Escuchar pedidos en tiempo real
+export function listenToOrders(callback: (orders: any[]) => void) {
+  const q = query(collection(db, 'pedidos'), orderBy('requestDate', 'desc'));
+  
+  return onSnapshot(q, (snapshot) => {
+    const orders = snapshot.docs.map(doc => ({
+      id: doc.id,
+      ...doc.data()
+    }));
+    callback(orders);
+  });
 }
