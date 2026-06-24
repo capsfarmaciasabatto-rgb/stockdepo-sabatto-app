@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { db } from './firebase';
+import { db } from '../firebase';
 import {
   doc,
   getDoc,
@@ -21,7 +21,7 @@ import {
   Role,
   PredefinedService,
   ServiceConfiguration
-} from './types';
+} from '../types';
 
 // ============================================================
 // DATOS INICIALES (solo para primera carga en Firebase)
@@ -362,7 +362,7 @@ const INITIAL_PRODUCTS: Product[] = [
       { id: 'b_s4_1', batchCode: 'CT-991', expirationDate: '2027-12-15', quantity: 40 }
     ]
   },
-    {
+  {
     id: 's5',
     name: 'Abrojos Madera (Bajalenguas)',
     presentation: 'Paquete x 100 unidades',
@@ -511,7 +511,6 @@ let unsubscribers: (() => void)[] = [];
 
 /**
  * Habilitar persistencia offline de Firestore (IndexedDB).
- * Esto permite que la app funcione sin internet y sincronice al reconectar.
  */
 export async function enableOfflinePersistence(): Promise<void> {
   try {
@@ -529,7 +528,6 @@ export async function enableOfflinePersistence(): Promise<void> {
 /**
  * Inicializa la base de datos Firebase.
  * Si el documento NO existe en Firestore, lo crea con datos por defecto.
- * Si existe, lo lee.
  * Retorna el estado inicial y un callback para suscribirse a cambios.
  */
 export async function initializeDB(): Promise<{
@@ -548,7 +546,6 @@ export async function initializeDB(): Promise<{
 
   const initialData = snap.exists() ? (snap.data() as FullDBState) : DEFAULT_STATE;
 
-  // Función de suscripción en tiempo real
   const subscribe = (callback: (state: FullDBState) => void) => {
     const unsubscribe = onSnapshot(
       stateRef,
@@ -571,7 +568,7 @@ export async function initializeDB(): Promise<{
 
 /**
  * Guarda el estado completo en Firestore.
- * ESTA ES LA FUNCIÓN CLAVE: cada llamada actualiza TODOS los dispositivos conectados.
+ * Cada llamada actualiza TODOS los dispositivos conectados.
  */
 export async function saveDBState(state: FullDBState): Promise<void> {
   const stateRef = doc(db, STATE_DOC_PATH);
