@@ -1,64 +1,216 @@
-import { db } from '../firebase';
-import { collection, addDoc, getDocs, doc, updateDoc, deleteDoc, onSnapshot, query, orderBy } from 'firebase/firestore';
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
-// Guardar un pedido nuevo
-export async function saveOrderToFirebase(order: any) {
-  try {
-    const docRef = await addDoc(collection(db, 'pedidos'), order);
-    console.log('Pedido guardado con ID:', docRef.id);
-    return docRef.id;
-  } catch (error) {
-    console.error('Error guardando pedido:', error);
-    throw error;
-  }
+import { db } from './firebase';
+import {
+  doc,
+  setDoc,
+  updateDoc,
+  getDoc,
+  onSnapshot,
+  type FirestoreError
+} from 'firebase/firestore';
+import type {
+  Order,
+  Product,
+  User,
+  AuditLog,
+  ServiceConfiguration,
+  FullDBState
+} from './types';
+
+const STATE_DOC_PATH = 'states/caps_sabatto';
+
+// ============================================================
+// FUNCIONES CRUD UNIFICADAS PARA EL ESTADO COMPLETO
+// ============================================================
+
+/**
+ * Obtiene el estado completo actual desde Firestore.
+ */
+export async function getFullState(): Promise<FullDBState | null> {
+  const ref = doc(db, STATE_DOC_PATH);
+  const snap = await getDoc(ref);
+  return snap.exists() ? (snap.data() as FullDBState) : null;
 }
 
-// Obtener todos los pedidos
-export async function getOrdersFromFirebase() {
-  try {
-    const querySnapshot = await getDocs(collection(db, 'pedidos'));
-    return querySnapshot.docs.map(doc => ({
-      id: doc.id,
-      ...doc.data()
-    }));
-  } catch (error) {
-    console.error('Error obteniendo pedidos:', error);
-    throw error;
-  }
+/**
+ * Sobrescribe el estado completo.
+ * Usar con cuidado — preferir funciones específicas de abajo.
+ */
+export async function setFullState(state: FullDBState): Promise<void> {
+  const ref = doc(db, STATE_DOC_PATH);
+  await setDoc(ref, state);
 }
 
-// Actualizar un pedido
-export async function updateOrderInFirebase(orderId: string, updates: any) {
-  try {
-    const orderRef = doc(db, 'pedidos', orderId);
-    await updateDoc(orderRef, updates);
-    console.log('Pedido actualizado:', orderId);
-  } catch (error) {
-    console.error('Error actualizando pedido:', error);
-    throw error;
-  }
+/**
+ * Actualiza campos parciales del estado.
+ */
+export async function patchState(updates: Partial<FullDBState>): Promise<void> {
+  const ref = doc(db, STATE_DOC_PATH);
+  await updateDoc(ref, updates);
 }
 
-// Eliminar un pedido
-export async function deleteOrderFromFirebase(orderId: string) {
-  try {
-    await deleteDoc(doc(db, 'pedidos', orderId));
-    console.log('Pedido eliminado:', orderId);
-  } catch (error) {
-    console.error('Error eliminando pedido:', error);
-    throw error;
-  }
+// ============================================================
+// PEDIDOS
+// ============================================================
+
+/**
+ * Agrega un nuevo pedido al estado.
+ * Automáticamente actualiza en tiempo real en todos los dispositivos.
+ */
+export async function addOrder(order: Order): Promise<void> {
+  const state = await getFullState();
+  if (!state) throw new Error('Estado no inicializado');
+  const updatedOrders = [order, ...state.orders];
+  await patchState({ orders: updatedOrders });
 }
 
-// Escuchar pedidos en tiempo real
-export function listenToOrders(callback: (orders: any[]) => void) {
-  const q = query(collection(db, 'pedidos'), orderBy('requestDate', 'desc'));
-  
-  return onSnapshot(q, (snapshot) => {
-    const orders = snapshot.docs.map(doc => ({
-      id: doc.id,
-      ...doc.data()
-    }));
-    callback(orders);
-  });
+/**
+ * Actualiza un pedido existente por ID.
+ */
+export async function updateOrder(orderId: string, updates: Partial<Order>): Promise<void> {
+  const state = await getFullState();
+  if (!state) throw new Error('Estado no inicializado');
+  const updatedOrders = state.orders.map(o =>
+    o.id === orderId ? { ...o, ...updates } : o
+  );
+  await patchState({ orders: updatedOrders });
+}
+
+/**
+ * Reemplaza la lista completa de pedidos.
+ */
+export async function setOrders(orders: Order[]): Promise<void> {
+  await patchState({ orders });
+}
+
+// ============================================================
+// PRODUCTOS (STOCK + LOTES)
+// ============================================================
+
+/**
+ * Reemplaza el catálogo completo de productos.
+ * Usar cuando el farmacéutico edita el catálogo.
+ */
+export async function setProducts(products: Product[]): Promise<void> {
+  await patchState({ products });
+}
+
+/**
+ * Actualiza un producto específico.
+ */
+export async function updateProduct(productId: string, updates: Partial<Product>): Promise<void> {
+  const state = await getFullState();
+  if (!state) throw new Error('Estado no inicializado');
+  const updatedProducts = state.products.map(p =>
+    p.id === productId ? { ...p, ...updates } : p
+  );
+  await patchState({ products: updatedProducts });
+}
+
+// ============================================================
+// USUARIOS
+// ============================================================
+
+/**
+ * Reemplaza la lista completa de usuarios.
+ */
+export async function setUsers(users: User[]): Promise<void> {
+  await patchState({ users });
+}
+
+/**
+ * Actualiza un usuario específico.
+ */
+export async function updateUser(userId: string, updates: Partial<User>): Promise<void> {
+  const state = await getFullState();
+  if (!state) throw new Error('Estado no inicializado');
+  const updatedUsers = state.users.map(u =>
+    u.id === userId ? { ...u, ...updates } : u
+  );
+  await patchState({ users: updatedUsers });
+}
+
+// ============================================================
+// CONFIGURACIONES DE SERVICIO
+// ============================================================
+
+/**
+ * Reemplaza las configuraciones semanales.
+ */
+export async function setServiceConfigs(configs: ServiceConfiguration[]): Promise<void> {
+  await patchState({ serviceConfigs: configs });
+}
+
+// ============================================================
+// AUDIT LOGS
+// ============================================================
+
+/**
+ * Agrega una entrada de auditoría al principio del array.
+ */
+export async function appendAuditLog(log: AuditLog): Promise<void> {
+  const state = await getFullState();
+  if (!state) throw new Error('Estado no inicializado');
+  const updatedLogs = [log, ...state.auditLogs];
+  await patchState({ auditLogs: updatedLogs });
+}
+
+/**
+ * Reemplaza todos los logs de auditoría.
+ */
+export async function setAuditLogs(logs: AuditLog[]): Promise<void> {
+  await patchState({ auditLogs: logs });
+}
+
+// ============================================================
+// LISTENER EN TIEMPO REAL (para componentes que necesitan
+// suscribirse directamente)
+// ============================================================
+
+/**
+ * Escucha cambios del estado completo en tiempo real.
+ * Retorna función de limpieza (unsubscribe).
+ */
+export function listenToState(callback: (state: FullDBState) => void): () => void {
+  const ref = doc(db, STATE_DOC_PATH);
+  return onSnapshot(
+    ref,
+    (snap) => {
+      if (snap.exists()) {
+        callback(snap.data() as FullDBState);
+      }
+    },
+    (error: FirestoreError) => {
+      console.error('[Firebase] Error en listenToState:', error);
+    }
+  );
+}
+
+// ============================================================
+// FUNCIONES LEGACY (mantenidas para compatibilidad con
+// código existente que use collection('pedidos'))
+// ============================================================
+
+/**
+ * @deprecated Usar listenToState() o getFullState() en su lugar.
+ * Escucha pedidos desde la colección legacy 'pedidos'.
+ */
+export function listenToOrdersLegacy(callback: (orders: Order[]) => void): () => void {
+  const ref = doc(db, STATE_DOC_PATH);
+  return onSnapshot(
+    ref,
+    (snap) => {
+      if (snap.exists()) {
+        const state = snap.data() as FullDBState;
+        callback(state.orders);
+      }
+    },
+    (error: FirestoreError) => {
+      console.error('[Firebase] Error en listenToOrdersLegacy:', error);
+    }
+  );
 }
