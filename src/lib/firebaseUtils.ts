@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { db } from './firebase';
+import { db } from '../firebase';
 import {
   doc,
   setDoc,
@@ -19,7 +19,7 @@ import type {
   AuditLog,
   ServiceConfiguration,
   FullDBState
-} from './types';
+} from '../types';
 
 const STATE_DOC_PATH = 'states/caps_sabatto';
 
@@ -38,7 +38,6 @@ export async function getFullState(): Promise<FullDBState | null> {
 
 /**
  * Sobrescribe el estado completo.
- * Usar con cuidado — preferir funciones específicas de abajo.
  */
 export async function setFullState(state: FullDBState): Promise<void> {
   const ref = doc(db, STATE_DOC_PATH);
@@ -59,7 +58,6 @@ export async function patchState(updates: Partial<FullDBState>): Promise<void> {
 
 /**
  * Agrega un nuevo pedido al estado.
- * Automáticamente actualiza en tiempo real en todos los dispositivos.
  */
 export async function addOrder(order: Order): Promise<void> {
   const state = await getFullState();
@@ -93,7 +91,6 @@ export async function setOrders(orders: Order[]): Promise<void> {
 
 /**
  * Reemplaza el catálogo completo de productos.
- * Usar cuando el farmacéutico edita el catálogo.
  */
 export async function setProducts(products: Product[]): Promise<void> {
   await patchState({ products });
@@ -167,8 +164,7 @@ export async function setAuditLogs(logs: AuditLog[]): Promise<void> {
 }
 
 // ============================================================
-// LISTENER EN TIEMPO REAL (para componentes que necesitan
-// suscribirse directamente)
+// LISTENER EN TIEMPO REAL
 // ============================================================
 
 /**
@@ -191,15 +187,52 @@ export function listenToState(callback: (state: FullDBState) => void): () => voi
 }
 
 // ============================================================
-// FUNCIONES LEGACY (mantenidas para compatibilidad con
-// código existente que use collection('pedidos'))
+// FUNCIONES LEGACY (compatibilidad con código existente)
+// Estas funciones mantienen la misma firma que el firebaseUtils.ts anterior
 // ============================================================
 
 /**
- * @deprecated Usar listenToState() o getFullState() en su lugar.
- * Escucha pedidos desde la colección legacy 'pedidos'.
+ * Guarda un pedido nuevo en Firebase.
+ * @deprecated Usar addOrder() o saveDBState() en su lugar.
  */
-export function listenToOrdersLegacy(callback: (orders: Order[]) => void): () => void {
+export async function saveOrderToFirebase(order: any): Promise<string> {
+  await addOrder(order as Order);
+  return order.id;
+}
+
+/**
+ * Obtiene todos los pedidos desde Firebase.
+ * @deprecated Usar getFullState() en su lugar.
+ */
+export async function getOrdersFromFirebase(): Promise<any[]> {
+  const state = await getFullState();
+  return state?.orders || [];
+}
+
+/**
+ * Actualiza un pedido en Firebase.
+ * @deprecated Usar updateOrder() en su lugar.
+ */
+export async function updateOrderInFirebase(orderId: string, updates: any): Promise<void> {
+  await updateOrder(orderId, updates);
+}
+
+/**
+ * Elimina un pedido de Firebase.
+ * @deprecated Usar setOrders() con el array filtrado en su lugar.
+ */
+export async function deleteOrderFromFirebase(orderId: string): Promise<void> {
+  const state = await getFullState();
+  if (!state) throw new Error('Estado no inicializado');
+  const updatedOrders = state.orders.filter(o => o.id !== orderId);
+  await setOrders(updatedOrders);
+}
+
+/**
+ * Escucha pedidos en tiempo real.
+ * @deprecated Usar listenToState() en su lugar.
+ */
+export function listenToOrders(callback: (orders: any[]) => void): () => void {
   const ref = doc(db, STATE_DOC_PATH);
   return onSnapshot(
     ref,
@@ -210,7 +243,7 @@ export function listenToOrdersLegacy(callback: (orders: Order[]) => void): () =>
       }
     },
     (error: FirestoreError) => {
-      console.error('[Firebase] Error en listenToOrdersLegacy:', error);
+      console.error('[Firebase] Error en listenToOrders:', error);
     }
   );
 }
