@@ -14,9 +14,7 @@ import FarmaceuticoView from './components/RoleViews/FarmaceuticoView';
 import DirectorView from './components/RoleViews/DirectorView';
 import { playBeep } from './lib/sound';
 import { Activity } from 'lucide-react';
-import { saveOrderToFirebase } from './lib/firebaseUtils';
-import { getOrdersFromFirebase } from './lib/firebaseUtils';
-import { listenToOrders } from './lib/firebaseUtils';
+import TestFirebase from './components/TestFirebase';
 
 export default function App() {
   // --- CORE SYSTEM STATES ---
@@ -30,7 +28,7 @@ export default function App() {
 
   // Centro de alertas activas
   const [activeAlerts, setActiveAlerts] = useState<{ id: string; text: string; type: 'critical' | 'new_order' | 'info' | 'expiring' }[]>([]);
-  
+
   // Simulación de Último Día Hábil de Mes (Para testing y demostración interactiva)
   const [simulateLastBusinessDay, setSimulateLastBusinessDay] = useState<boolean>(false);
 
@@ -56,15 +54,14 @@ export default function App() {
 
   const isLastBusinessDayActive = isLastBusinessDayOfMonth() || simulateLastBusinessDay;
 
-  // --- INITIALIZE APPLICATION & PERSISTENCE ---
-useEffect(() => {
-    const state = initializeDB();
-    
-    // Escuchar pedidos en tiempo real desde Firebase
-    const unsubscribe = listenToOrders((firebaseOrders) => {
-      setDbState({
-        ...state,
-        orders: firebaseOrders
+  // --- INITIALIZE APPLICATION & PERSISTENCE (FIREBASE) ---
+  useEffect(() => {
+    let unsubscribe: (() => void) | null = null;
+
+    initializeDB().then(({ initialState, subscribe }) => {
+      setDbState(initialState);
+      unsubscribe = subscribe((newState) => {
+        setDbState(newState);
       });
     });
 
@@ -96,8 +93,9 @@ useEffect(() => {
     if (savedSortOrder === 'name-asc' || savedSortOrder === 'name-desc' || savedSortOrder === 'type-med' || savedSortOrder === 'type-pm') {
       setProductSortOrder(savedSortOrder);
     }
-      return () => {
-      unsubscribe();
+
+    return () => {
+      if (unsubscribe) unsubscribe();
     };
   }, []);
 
@@ -125,7 +123,7 @@ useEffect(() => {
   }, [soundMuted]);
 
   // --- EVALUACIÓN DE ALERTAS EN TIEMPO REAL ---
-  // Alertas de stock crítico e insumos caducando
+
   const evaluateAlertsAndAlarms = (state: FullDBState) => {
     const alertsList: { id: string; text: string; type: 'critical' | 'new_order' | 'info' | 'expiring' }[] = [];
     const today = new Date();
@@ -251,9 +249,9 @@ useEffect(() => {
   };
 
   // --- OPERATIONS ON DB/STATE ---
-  
+
   // Enfermero envía pedido
-  const handleSubmitOrder = async (order: Order) => {
+  const handleSubmitOrder = (order: Order) => {
     if (!dbState) return;
 
     const updatedOrders = [order, ...dbState.orders];
@@ -273,12 +271,6 @@ useEffect(() => {
 
     setDbState(updatedState);
     saveDBState(updatedState);
-    // Sincronizar con Firebase
-try {
-  await saveOrderToFirebase(order);
-} catch (error) {
-  console.error('Error sincronizando con Firebase:', error);
-}
 
     // Reproducir pitido de alarma nuevo pedido para el depósito
     playBeep('alert');
@@ -445,12 +437,12 @@ try {
   const handleResetProductionMode = () => {
     setDbState(prev => {
       if (!prev) return prev;
-      
+
       const resetProducts = prev.products.map(p => ({
         ...p,
         batches: [] // Despejar de raíz todos los lotes experimentales o simulados
       }));
-      
+
       const newAudit: AuditLog = {
         id: `aud_${Date.now()}`,
         timestamp: new Date().toISOString(),
@@ -460,18 +452,18 @@ try {
         action: 'SYSTEM_RESET',
         details: 'Base de datos de prueba purgada con éxito por el Farmacéutico Administrador. Todos los lotes simulados se ajustaron a 0 y se borró el historial de pedidos de prueba. CAPS iniciado en Producción Real.'
       };
-      
+
       const updatedState = {
         ...prev,
         products: resetProducts,
         orders: [], // Limpiar pedidos históricos simulados
         auditLogs: [newAudit] // Dejar únicamente la bitácora de inauguración limpia
       };
-      
+
       saveDBState(updatedState);
       return updatedState;
     });
-    
+
     playBeep('success');
   };
 
@@ -482,16 +474,16 @@ try {
   // --- ORDENAMIENTO DE INSUMOS FEFO SEGÚN SELECCIÓN DE USUARIO ---
   const sortedProducts = useMemo(() => {
     if (!dbState) return [];
-    
+
     // Hacer una copia del catálogo de productos para no mutar el estado directamente
     const productsCopy = [...dbState.products];
-    
+
     return productsCopy.sort((a, b) => {
       const nameA = a.name.trim().toLowerCase();
       const nameB = b.name.trim().toLowerCase();
       const typeA = a.productType || 'Med';
       const typeB = b.productType || 'Med';
-      
+
       if (productSortOrder === 'name-asc') {
         return nameA.localeCompare(nameB, undefined, { sensitivity: 'base' });
       } else if (productSortOrder === 'name-desc') {
@@ -547,7 +539,7 @@ try {
       case Role.FARMACEUTICO:
         return (
           <div className="space-y-6">
-            
+
             {/* El farmacéutico como super-usuario tiene acceso inmediato a probar comportamientos de los otros roles */}
             <div className="bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-4 rounded-2xl flex items-start gap-3">
               <span className="p-1 px-1.5 bg-orange-100 dark:bg-orange-950 rounded font-bold font-mono text-[10px] text-orange-700 dark:text-orange-300 uppercase shrink-0">VISTA DIRECTA</span>
@@ -606,7 +598,7 @@ try {
 
   return (
     <div className="min-h-screen bg-[var(--app-bg)] transition-colors duration-300 text-slate-800 dark:text-slate-200">
-      
+
       {/* Pantalla suave de transiciones de rol */}
       {transitionLoading && (
         <div id="transition_screen" className="fixed inset-0 bg-slate-950/80 backdrop-blur-md flex flex-col items-center justify-center z-50 transition-opacity duration-300">
@@ -639,7 +631,7 @@ try {
           />
 
           <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pb-16">
-            
+
             {/* Banner de Sincronización Local & Criterio de Ordenamiento de Insumos */}
             <div className="mb-6 flex flex-col md:flex-row justify-between items-stretch md:items-center p-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl shadow-xs gap-4 text-[11px] font-mono text-slate-400">
               <div className="flex flex-wrap items-center gap-3">
