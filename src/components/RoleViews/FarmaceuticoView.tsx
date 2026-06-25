@@ -1756,69 +1756,71 @@ export default function FarmaceuticoView({
   };
 
   // ABM USUARIOS
-  const handleCreateOrUpdateUser = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!uName.trim() || !uEmail.trim()) return;
+const handleCreateOrUpdateUser = (e: React.FormEvent) => {
+  e.preventDefault();
+  if (!uName.trim() || !uEmail.trim()) return;
 
-    let updatedList = [...users];
+  let updatedList = [...users];
 
-    if (editingUser) {
-      updatedList = updatedList.map(u => {
-        if (u.id === editingUser.id) {
-          return {
-            ...u,
-            name: uName.trim(),
-            email: uEmail.trim().toLowerCase(),
-            role: uRole,
-            service: uRole === Role.ENFERMERO ? uService : undefined,
-            password: uPassword.trim() || undefined
-          };
-        }
-        return u;
-      });
+  if (editingUser) {
+    updatedList = updatedList.map(u => {
+      if (u.id === editingUser.id) {
+        return {
+          ...u,
+          name: uName.trim(),
+          email: uEmail.trim().toLowerCase(),
+          role: uRole,
+          service: uRole === Role.ENFERMERO ? uService : undefined,
+          // CORRECCIÓN: Nunca guardar undefined en Firestore
+          password: uPassword.trim() || '123456'
+        };
+      }
+      return u;
+    });
 
-      onAppendAudit({
-        id: `aud_${Date.now()}`,
-        timestamp: new Date().toISOString(),
-        userId: currentUser.id,
-        userName: currentUser.name,
-        userRole: currentUser.role,
-        action: 'USER_UPDATE',
-        details: `Modificó credenciales usuario: ${uName} (${uEmail})`
-      });
+    onAppendAudit({
+      id: `aud_${Date.now()}`,
+      timestamp: new Date().toISOString(),
+      userId: currentUser.id,
+      userName: currentUser.name,
+      userRole: currentUser.role,
+      action: 'USER_UPDATE',
+      details: `Modificó credenciales usuario: ${uName} (${uEmail})`
+    });
 
-    } else {
-      const newUser: User = {
-        id: `u_${Date.now()}`,
-        name: uName.trim(),
-        email: uEmail.trim().toLowerCase(),
-        role: uRole,
-        service: uRole === Role.ENFERMERO ? uService : undefined,
-        password: uPassword.trim() || undefined
-      };
-      
-      updatedList.push(newUser);
+  } else {
+    const newUser: User = {
+      id: `u_${Date.now()}`,
+      name: uName.trim(),
+      email: uEmail.trim().toLowerCase(),
+      role: uRole,
+      service: uRole === Role.ENFERMERO ? uService : undefined,
+      // CORRECCIÓN: Nunca guardar undefined en Firestore
+      password: uPassword.trim() || '123456'
+    };
+    
+    updatedList.push(newUser);
 
-      onAppendAudit({
-        id: `aud_${Date.now()}`,
-        timestamp: new Date().toISOString(),
-        userId: currentUser.id,
-        userName: currentUser.name,
-        userRole: currentUser.role,
-        action: 'USER_UPDATE',
-        details: `Registró nuevo personal CAPS: ${uName} como ${uRole}`
-      });
-    }
+    onAppendAudit({
+      id: `aud_${Date.now()}`,
+      timestamp: new Date().toISOString(),
+      userId: currentUser.id,
+      userName: currentUser.name,
+      userRole: currentUser.role,
+      action: 'USER_UPDATE',
+      details: `Registró nuevo personal CAPS: ${uName} como ${uRole}`
+    });
+  }
 
-    onUpdateUsers(updatedList);
-    setUName('');
-    setUEmail('');
-    setURole(Role.ENFERMERO);
-    setUService(PredefinedService.GUARDIA);
-    setUPassword('');
-    setEditingUser(null);
-    playBeep('success');
-  };
+  onUpdateUsers(updatedList);
+  setUName('');
+  setUEmail('');
+  setURole(Role.ENFERMERO);
+  setUService(PredefinedService.GUARDIA);
+  setUPassword('');
+  setEditingUser(null);
+  playBeep('success');
+};
 
   const copyCredentials = (u: User) => {
     const credText = `Portal: StockDepo Sabatto\nPersonal: ${u.name}\nRol: ${u.role}${u.service ? ` (${u.service})` : ''}\nEmail: ${u.email}\nContraseña: ${u.password || '123456'}`;
