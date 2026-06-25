@@ -572,8 +572,14 @@ export async function initializeDB(): Promise<{
  */
 export async function saveDBState(state: FullDBState): Promise<void> {
   const stateRef = doc(db, STATE_DOC_PATH);
-  const cleanState = JSON.parse(JSON.stringify(state));
-  await setDoc(stateRef, state);
+  
+  // CORRECCIÓN: Eliminar todos los undefined recursivamente antes de guardar
+  const cleanState = JSON.parse(JSON.stringify(state, (key, value) => {
+    if (value === undefined) return null;
+    return value;
+  }));
+  
+  await setDoc(stateRef, cleanState);
 }
 
 /**
