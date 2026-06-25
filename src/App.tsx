@@ -392,35 +392,44 @@ export default function App() {
     saveDBState(updatedState);
   };
 
-  // Farmacéutico actualiza productos
-  const handleUpdateProducts = (updatedProducts: Product[]) => {
-    setDbState(prev => {
-      if (!prev) return prev;
-      const updatedState = { ...prev, products: updatedProducts };
-      saveDBState(updatedState);
-      return updatedState;
-    });
-  };
+// REEMPLAZAR handleUpdateUsers
+const handleUpdateUsers = async (updatedUsers: User[]) => {
+  if (!dbState) return;
+  const updatedState = { ...dbState, users: updatedUsers };
+  try {
+    await saveDBState(updatedState);
+    setDbState(updatedState);
+  } catch (error) {
+    console.error('Error guardando usuarios:', error);
+    alert('Error al guardar cambios de usuarios. Revisa la consola.');
+  }
+};
 
-  // Farmacéutico actualiza usuarios
-  const handleUpdateUsers = (updatedUsers: User[]) => {
-    setDbState(prev => {
-      if (!prev) return prev;
-      const updatedState = { ...prev, users: updatedUsers };
-      saveDBState(updatedState);
-      return updatedState;
-    });
-  };
+// REEMPLAZAR handleUpdateProducts  
+const handleUpdateProducts = async (updatedProducts: Product[]) => {
+  if (!dbState) return;
+  const updatedState = { ...dbState, products: updatedProducts };
+  try {
+    await saveDBState(updatedState);
+    setDbState(updatedState);
+  } catch (error) {
+    console.error('Error guardando productos:', error);
+    alert('Error al guardar productos. Revisa la consola.');
+  }
+};
 
-  // Farmacéutico actualiza configs semanales
-  const handleUpdateServiceConfigs = (updatedConfigs: ServiceConfiguration[]) => {
-    setDbState(prev => {
-      if (!prev) return prev;
-      const updatedState = { ...prev, serviceConfigs: updatedConfigs };
-      saveDBState(updatedState);
-      return updatedState;
-    });
-  };
+// REEMPLAZAR handleUpdateServiceConfigs
+const handleUpdateServiceConfigs = async (updatedConfigs: ServiceConfiguration[]) => {
+  if (!dbState) return;
+  const updatedState = { ...dbState, serviceConfigs: updatedConfigs };
+  try {
+    await saveDBState(updatedState);
+    setDbState(updatedState);
+  } catch (error) {
+    console.error('Error guardando configs:', error);
+    alert('Error al guardar configuraciones. Revisa la consola.');
+  }
+};
 
   // Farmacéutico añade auditLog manual
   const handleAppendAudit = (log: AuditLog) => {
