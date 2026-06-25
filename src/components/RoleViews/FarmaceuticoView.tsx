@@ -1496,83 +1496,82 @@ export default function FarmaceuticoView({
     return products.find(p => p.id === adjustProductId);
   }, [products, adjustProductId]);
 
-  const handleCreateOrUpdateProduct = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!pName.trim() || !pPresentation.trim()) return;
+const handleCreateOrUpdateProduct = (e: React.FormEvent) => {
+  e.preventDefault();
+  if (!pName.trim() || !pPresentation.trim()) return;
 
-    let updatedList = [...products];
+  let updatedList = [...products];
 
-    if (editingProduct) {
-      updatedList = updatedList.map(p => {
-        if (p.id === editingProduct.id) {
-          return {
-            ...p,
-            name: pName.trim(),
-            presentation: pPresentation.trim(),
-            minStock: Number(pMinStock),
-            category: pCategory,
-            shelfLetter: pShelfLetter,
-            shelfLevel: Number(pShelfLevel),
-            productType: pProductType,
-            // Mantener lotes y servicios anteriores
-          };
-        }
-        return p;
-      });
+  if (editingProduct) {
+    updatedList = updatedList.map(p => {
+      if (p.id === editingProduct.id) {
+        return {
+          ...p,
+          name: pName.trim(),
+          presentation: pPresentation.trim(),
+          minStock: Number(pMinStock) || 10,
+          category: pCategory || 'Compartido',
+          shelfLetter: pShelfLetter || 'A',
+          shelfLevel: Number(pShelfLevel) || 1,
+          productType: pProductType || 'Med',
+          // Mantener lotes y servicios anteriores
+        };
+      }
+      return p;
+    });
 
-      onAppendAudit({
-        id: `aud_${Date.now()}`,
-        timestamp: new Date().toISOString(),
-        userId: currentUser.id,
-        userName: currentUser.name,
-        userRole: currentUser.role,
-        action: 'CATALOG_UPDATE',
-        details: `Actualizó insumo catálogo: ${pName} (${pPresentation})`
-      });
+    onAppendAudit({
+      id: `aud_${Date.now()}`,
+      timestamp: new Date().toISOString(),
+      userId: currentUser.id,
+      userName: currentUser.name,
+      userRole: currentUser.role,
+      action: 'CATALOG_UPDATE',
+      details: `Actualizó insumo catálogo: ${pName} (${pPresentation})`
+    });
 
-    } else {
-      const newId = `p_added_${Date.now()}`;
-      const newProduct: Product = {
-        id: newId,
-        name: pName.trim(),
-        presentation: pPresentation.trim(),
-        minStock: Number(pMinStock),
-        category: pCategory,
-        shelfLetter: pShelfLetter,
-        shelfLevel: Number(pShelfLevel),
-        productType: pProductType,
-        batches: [
-          // Lote inicial vacío para completar la entidad
-          { id: `b_init_${Date.now()}`, batchCode: 'L-NUEVO-01', expirationDate: '2027-12-31', quantity: 20 }
-        ],
-        allowedServices: pCategory === 'Compartido' 
-          ? [PredefinedService.GUARDIA, PredefinedService.LABORATORIO, PredefinedService.IRAB, PredefinedService.FARMACIA]
-          : [pCategory as PredefinedService]
-      };
-      
-      updatedList.unshift(newProduct);
+  } else {
+    const newId = `p_added_${Date.now()}`;
+    const newProduct: Product = {
+      id: newId,
+      name: pName.trim(),
+      presentation: pPresentation.trim(),
+      minStock: Number(pMinStock) || 10,
+      category: pCategory || 'Compartido',
+      shelfLetter: pShelfLetter || 'A',
+      shelfLevel: Number(pShelfLevel) || 1,
+      productType: pProductType || 'Med',
+      batches: [
+        { id: `b_init_${Date.now()}`, batchCode: 'L-NUEVO-01', expirationDate: '2027-12-31', quantity: 20 }
+      ],
+      allowedServices: pCategory === 'Compartido' 
+        ? [PredefinedService.GUARDIA, PredefinedService.LABORATORIO, PredefinedService.IRAB, PredefinedService.FARMACIA]
+        : [pCategory as PredefinedService]
+    };
+    
+    updatedList.unshift(newProduct);
 
-      onAppendAudit({
-        id: `aud_${Date.now()}`,
-        timestamp: new Date().toISOString(),
-        userId: currentUser.id,
-        userName: currentUser.name,
-        userRole: currentUser.role,
-        action: 'CATALOG_UPDATE',
-        details: `Agregó nuevo insumo a depósito: ${pName}`
-      });
-    }
+    onAppendAudit({
+      id: `aud_${Date.now()}`,
+      timestamp: new Date().toISOString(),
+      userId: currentUser.id,
+      userName: currentUser.name,
+      userRole: currentUser.role,
+      action: 'CATALOG_UPDATE',
+      details: `Agregó nuevo insumo a depósito: ${pName}`
+    });
+  }
 
-    onUpdateProducts(updatedList);
-    setPName('');
-    setPPresentation('');
-    setPMinStock(10);
-    setPShelfLetter('A');
-    setPShelfLevel(1);
-    setPProductType('Med');
-    setEditingProduct(null);
-    playBeep('success');
-  };
+  onUpdateProducts(updatedList);
+  setPName('');
+  setPPresentation('');
+  setPMinStock(10);
+  setPShelfLetter('A');
+  setPShelfLevel(1);
+  setPProductType('Med');
+  setEditingProduct(null);
+  playBeep('success');
+};
 
   const handleDeleteProduct = (pId: string) => {
     setDialog({
