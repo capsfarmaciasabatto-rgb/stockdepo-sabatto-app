@@ -45,16 +45,15 @@ export default function AuthScreen({ users, onLoginSuccess, lang }: AuthScreenPr
     }, 600);
   };
 
-  const loginAsDemo = (demoEmail: string) => {
-    setLoading(true);
+  const selectDemoUser = (demoEmail: string) => {
+    setEmail(demoEmail);
+    setPassword('');
     setErrorMsg('');
-    setTimeout(() => {
-      const foundUser = users.find(u => u.email === demoEmail);
-      if (foundUser) {
-        onLoginSuccess(foundUser);
-      }
-      setLoading(false);
-    }, 450);
+    // Enfocar el campo de contraseña para que el usuario la tipee
+    const passInput = document.getElementById('login-pass-input');
+    if (passInput) {
+      setTimeout(() => (passInput as HTMLInputElement).focus(), 100);
+    }
   };
 
   return (
@@ -98,12 +97,16 @@ export default function AuthScreen({ users, onLoginSuccess, lang }: AuthScreenPr
             <span className="text-[11px] uppercase tracking-wider font-extrabold text-orange-600 dark:text-orange-400 font-mono block">
               {t.demoAccount}
             </span>
+            <p className="text-[10px] text-zinc-500 dark:text-zinc-400 mb-2">
+              {lang === 'es' 
+                ? 'Selecciona un perfil para precargar tu usuario. Luego ingresá tu contraseña personal.' 
+                : 'Select a profile to prefill your email. Then enter your personal password.'}
+            </p>
             <div className="grid grid-cols-1 gap-2">
               <button
                 id="demo_enfermero"
                 type="button"
-                onClick={() => loginAsDemo('enfermero@test.com')}
-                disabled={loading}
+                onClick={() => selectDemoUser('enfermero@test.com')}
                 className="flex items-center justify-between text-left px-4 py-2.5 text-xs font-semibold rounded-xl bg-zinc-50 hover:bg-zinc-100 dark:bg-zinc-800/55 dark:hover:bg-zinc-800 border border-zinc-200/60 dark:border-zinc-700/60 text-zinc-700 dark:text-zinc-300 transition duration-150 cursor-pointer disabled:opacity-50"
               >
                 <div className="flex items-center gap-2">
@@ -116,8 +119,7 @@ export default function AuthScreen({ users, onLoginSuccess, lang }: AuthScreenPr
               <button
                 id="demo_irab"
                 type="button"
-                onClick={() => loginAsDemo('irab@test.com')}
-                disabled={loading}
+                onClick={() => selectDemoUser('irab@test.com')}
                 className="flex items-center justify-between text-left px-4 py-2.5 text-xs font-semibold rounded-xl bg-zinc-50 hover:bg-zinc-100 dark:bg-zinc-800/55 dark:hover:bg-zinc-800 border border-zinc-200/60 dark:border-zinc-700/60 text-zinc-700 dark:text-zinc-300 transition duration-150 cursor-pointer disabled:opacity-50"
               >
                 <div className="flex items-center gap-2">
@@ -130,8 +132,7 @@ export default function AuthScreen({ users, onLoginSuccess, lang }: AuthScreenPr
               <button
                 id="demo_tecnico"
                 type="button"
-                onClick={() => loginAsDemo('tecnico@test.com')}
-                disabled={loading}
+                onClick={() => selectDemoUser('tecnico@test.com')}
                 className="flex items-center justify-between text-left px-4 py-2.5 text-xs font-semibold rounded-xl bg-zinc-50 hover:bg-zinc-100 dark:bg-zinc-800/55 dark:hover:bg-zinc-800 border border-zinc-200/60 dark:border-zinc-700/60 text-zinc-700 dark:text-zinc-300 transition duration-150 cursor-pointer disabled:opacity-50"
               >
                 <div className="flex items-center gap-2">
@@ -144,8 +145,7 @@ export default function AuthScreen({ users, onLoginSuccess, lang }: AuthScreenPr
               <button
                 id="demo_caps_admin"
                 type="button"
-                onClick={() => loginAsDemo('capsfarmaciasabatto@gmail.com')}
-                disabled={loading}
+                onClick={() => selectDemoUser('capsfarmaciasabatto@gmail.com')}
                 className="flex items-center justify-between text-left px-4 py-2.5 text-xs font-semibold rounded-xl bg-orange-50/40 hover:bg-orange-50/80 dark:bg-orange-950/20 dark:hover:bg-orange-950/30 border border-orange-500/20 dark:border-orange-500/10 text-orange-700 dark:text-orange-400 transition duration-150 cursor-pointer disabled:opacity-50 font-sans"
               >
                 <div className="flex items-center gap-2">
@@ -158,8 +158,7 @@ export default function AuthScreen({ users, onLoginSuccess, lang }: AuthScreenPr
               <button
                 id="demo_farmaceutico"
                 type="button"
-                onClick={() => loginAsDemo('farmaceutico@test.com')}
-                disabled={loading}
+                onClick={() => selectDemoUser('farmaceutico@test.com')}
                 className="flex items-center justify-between text-left px-4 py-2.5 text-xs font-semibold rounded-xl bg-zinc-50 hover:bg-zinc-100 dark:bg-zinc-800/55 dark:hover:bg-zinc-800 border border-zinc-200/60 dark:border-zinc-700/60 text-zinc-700 dark:text-zinc-300 transition duration-150 cursor-pointer disabled:opacity-50"
               >
                 <div className="flex items-center gap-2">
@@ -172,8 +171,7 @@ export default function AuthScreen({ users, onLoginSuccess, lang }: AuthScreenPr
               <button
                 id="demo_director"
                 type="button"
-                onClick={() => loginAsDemo('director@test.com')}
-                disabled={loading}
+                onClick={() => selectDemoUser('director@test.com')}
                 className="flex items-center justify-between text-left px-4 py-2.5 text-xs font-semibold rounded-xl bg-zinc-50 hover:bg-zinc-100 dark:bg-zinc-800/55 dark:hover:bg-zinc-800 border border-zinc-200/60 dark:border-zinc-700/60 text-zinc-700 dark:text-zinc-300 transition duration-150 cursor-pointer disabled:opacity-50"
               >
                 <div className="flex items-center gap-2">
