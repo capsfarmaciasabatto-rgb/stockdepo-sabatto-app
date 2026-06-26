@@ -84,7 +84,12 @@ export default function Navigation({
         return role;
     }
   };
-
+  
+  // Solo Farmacéutico Principal (Admin) y Director pueden simular otros roles
+  const canSwitchRoles = (role: Role) => {
+    return role === Role.FARMACEUTICO || role === Role.DIRECTOR;
+  };
+  
   return (
     <nav className="bg-white dark:bg-zinc-950 border-b border-zinc-200 dark:border-zinc-900 sticky top-0 z-50 transition-colors duration-300 shadow-sm">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -228,28 +233,30 @@ export default function Navigation({
                     <p className="text-[11px] text-zinc-400 font-mono truncate">{currentUser.email}</p>
                   </div>
 
-                  {/* Alternar perfiles rápido (Requisito estricto de demo) */}
-                  <div className="p-2 space-y-1">
-                    <span className="text-[10px] font-extrabold uppercase font-mono tracking-widest text-orange-600 dark:text-orange-400 block px-2 pt-1 pb-1">
-                      Simular Otro Rol
-                    </span>
-                    {allUsers.map((u) => (
-                      <button
-                        key={u.id}
-                        onClick={() => {
-                          onSwitchUser(u);
-                          setProfileOpen(false);
-                        }}
-                        className={`w-full text-left px-3 py-2 rounded-xl text-xs font-semibold font-sans flex items-center justify-between cursor-pointer transition duration-150 ${currentUser.id === u.id ? 'bg-orange-50/50 dark:bg-orange-950/20 text-orange-600 dark:text-orange-400 border border-orange-500/10' : 'hover:bg-zinc-50 dark:hover:bg-zinc-800/40 text-zinc-700 dark:text-zinc-300'}`}
-                      >
-                        <div className="flex items-center gap-2">
-                          <span className={`size-2 rounded-full ${u.role === Role.FARMACEUTICO ? 'bg-orange-600' : u.role === Role.TECNICO ? 'bg-slate-700' : u.role === Role.DIRECTOR ? 'bg-teal-600' : 'bg-slate-500'}`}></span>
-                          <span>{u.name.split(' ')[0]} <span className="font-mono text-[10px] text-zinc-400">({u.role === Role.ENFERMERO ? u.service : (u.role === Role.DIRECTOR ? 'Dirección' : 'Depósito')})</span></span>
-                        </div>
-                        {currentUser.id === u.id && <span className="text-[9px] text-orange-600 dark:text-orange-400 uppercase font-bold font-mono">Activo</span>}
-                      </button>
-                    ))}
-                  </div>
+              {/* Alternar perfiles rápido - Solo visible para Admin y Director */}
+                  {canSwitchRoles(currentUser.role) && (
+                    <div className="p-2 space-y-1">
+                      <span className="text-[10px] font-extrabold uppercase font-mono tracking-widest text-orange-600 dark:text-orange-400 block px-2 pt-1 pb-1">
+                        Simular Otro Rol
+                      </span>
+                      {allUsers.map((u) => (
+                        <button
+                          key={u.id}
+                          onClick={() => {
+                            onSwitchUser(u);
+                            setProfileOpen(false);
+                          }}
+                          className={`w-full text-left px-3 py-2 rounded-xl text-xs font-semibold font-sans flex items-center justify-between cursor-pointer transition duration-150 ${currentUser.id === u.id ? 'bg-orange-50/50 dark:bg-orange-950/20 text-orange-600 dark:text-orange-400 border border-orange-500/10' : 'hover:bg-zinc-50 dark:hover:bg-zinc-800/40 text-zinc-700 dark:text-zinc-300'}`}
+                        >
+                          <div className="flex items-center gap-2">
+                            <span className={`size-2 rounded-full ${u.role === Role.FARMACEUTICO ? 'bg-orange-600' : u.role === Role.TECNICO ? 'bg-slate-700' : u.role === Role.DIRECTOR ? 'bg-teal-600' : 'bg-slate-500'}`}></span>
+                            <span>{u.name.split(' ')[0]} <span className="font-mono text-[10px] text-zinc-400">({u.role === Role.ENFERMERO ? u.service : (u.role === Role.DIRECTOR ? 'Dirección' : 'Depósito')})</span></span>
+                          </div>
+                          {currentUser.id === u.id && <span className="text-[9px] text-orange-600 dark:text-orange-400 uppercase font-bold font-mono">Activo</span>}
+                        </button>
+                      ))}
+                    </div>
+                  )}
 
                   <div className="border-t border-zinc-100 dark:border-zinc-800 mt-2 pt-1 px-2">
                     <button
