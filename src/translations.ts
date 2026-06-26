@@ -9,7 +9,7 @@ export const translations = {
     subtitle: "Gestión de Suministros CAP",
     loginTitle: "Ingreso al Sistema",
     loginSubtitle: "Seleccione un perfil de prueba para la demo o ingrese sus credenciales.",
-    demoAccount: "Acceso Rápido Demo",
+    demoAccount: "Acceso Rápido Demo (Precarga de Usuario)",
     enfermero: "Enfermero/a",
     tecnico: "Técnico de Farmacia",
     farmaceutico: "Farmacéutico/a (Admin)",
