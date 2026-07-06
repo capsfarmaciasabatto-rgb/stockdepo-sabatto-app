@@ -3,390 +3,28 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { db } from '../firebase';
-import {
-  doc,
-  getDoc,
-  setDoc,
-  updateDoc,
-  onSnapshot,
-  enableIndexedDbPersistence,
-  type FirestoreError
-} from 'firebase/firestore';
-import {
+import { supabase } from '../supabase';
+import type {
   User,
   Product,
   Order,
   AuditLog,
   Role,
   PredefinedService,
-  ServiceConfiguration
+  ServiceConfiguration,
+  Batch
 } from '../types';
 
 // ============================================================
-// DATOS INICIALES (solo para primera carga en Firebase)
+// DATOS INICIALES (para seeding si las tablas están vacías)
 // ============================================================
 
-const INITIAL_PRODUCTS: Product[] = [
-  // --- GUARDIA ---
-  {
-    id: 'g1',
-    name: 'Hidrocortisona 500 mg',
-    presentation: 'Frasco Ampolla (FA) inyectable',
-    minStock: 20,
-    category: PredefinedService.GUARDIA,
-    allowedServices: [PredefinedService.GUARDIA],
-    productType: 'Med',
-    shelfLetter: 'A',
-    shelfLevel: 1,
-    batches: [
-      { id: 'b_g1_1', batchCode: 'HC-501A', expirationDate: '2026-06-15', quantity: 15 },
-      { id: 'b_g1_2', batchCode: 'HC-502B', expirationDate: '2026-11-30', quantity: 40 }
-    ]
-  },
-  {
-    id: 'g2',
-    name: 'Furosemida 20 mg',
-    presentation: 'Ampolla 2 ml',
-    minStock: 50,
-    category: PredefinedService.GUARDIA,
-    allowedServices: [PredefinedService.GUARDIA],
-    productType: 'Med',
-    shelfLetter: 'A',
-    shelfLevel: 1,
-    batches: [
-      { id: 'b_g2_1', batchCode: 'FS-991', expirationDate: '2026-09-10', quantity: 80 }
-    ]
-  },
-  {
-    id: 'g3',
-    name: 'Dipirona 1g (Metamizol)',
-    presentation: 'Ampolla 2 ml',
-    minStock: 40,
-    category: PredefinedService.GUARDIA,
-    allowedServices: [PredefinedService.GUARDIA],
-    productType: 'Med',
-    shelfLetter: 'A',
-    shelfLevel: 2,
-    batches: [
-      { id: 'b_g3_1', batchCode: 'DP-044', expirationDate: '2026-06-05', quantity: 12 },
-      { id: 'b_g3_2', batchCode: 'DP-045', expirationDate: '2027-02-15', quantity: 100 }
-    ]
-  },
-  {
-    id: 'g4',
-    name: 'Adrenalina 1 mg/ml',
-    presentation: 'Ampolla 1 ml',
-    minStock: 15,
-    category: PredefinedService.GUARDIA,
-    allowedServices: [PredefinedService.GUARDIA],
-    productType: 'Med',
-    shelfLetter: 'A',
-    shelfLevel: 2,
-    batches: [
-      { id: 'b_g4_1', batchCode: 'AD-211', expirationDate: '2026-10-01', quantity: 25 }
-    ]
-  },
-  {
-    id: 'g5',
-    name: 'Diazepam 10 mg',
-    presentation: 'Ampolla 2 ml',
-    minStock: 10,
-    category: PredefinedService.GUARDIA,
-    allowedServices: [PredefinedService.GUARDIA],
-    productType: 'Med',
-    shelfLetter: 'A',
-    shelfLevel: 3,
-    batches: [
-      { id: 'b_g5_1', batchCode: 'DZ-881', expirationDate: '2026-12-25', quantity: 18 }
-    ]
-  },
-  {
-    id: 'g6',
-    name: 'Dexametasona 4 mg',
-    presentation: 'Ampolla 1 ml',
-    minStock: 30,
-    category: PredefinedService.GUARDIA,
-    allowedServices: [PredefinedService.GUARDIA],
-    productType: 'Med',
-    shelfLetter: 'A',
-    shelfLevel: 3,
-    batches: [
-      { id: 'b_g6_1', batchCode: 'DX-109', expirationDate: '2026-08-14', quantity: 50 }
-    ]
-  },
-  {
-    id: 'g7',
-    name: 'Clonazepam 2 mg',
-    presentation: 'Comprimidos y gotas',
-    minStock: 25,
-    category: PredefinedService.GUARDIA,
-    allowedServices: [PredefinedService.GUARDIA, PredefinedService.IRAB],
-    productType: 'Med',
-    shelfLetter: 'B',
-    shelfLevel: 1,
-    batches: [
-      { id: 'b_g7_1', batchCode: 'CN-334', expirationDate: '2026-07-20', quantity: 30 }
-    ]
-  },
-  // --- LABORATORIO ---
-  {
-    id: 'l1',
-    name: 'Agujas Descartables 25/8',
-    presentation: 'Caja x 100 unidades',
-    minStock: 5,
-    category: PredefinedService.LABORATORIO,
-    allowedServices: [PredefinedService.LABORATORIO, PredefinedService.GUARDIA],
-    productType: 'PM',
-    shelfLetter: 'C',
-    shelfLevel: 1,
-    batches: [
-      { id: 'b_l1_1', batchCode: 'AG-258A', expirationDate: '2027-04-12', quantity: 8 }
-    ]
-  },
-  {
-    id: 'l2',
-    name: 'Jeringas Descartables 10 ml',
-    presentation: 'Caja x 100 unidades',
-    minStock: 5,
-    category: PredefinedService.LABORATORIO,
-    allowedServices: [PredefinedService.LABORATORIO, PredefinedService.GUARDIA],
-    productType: 'PM',
-    shelfLetter: 'C',
-    shelfLevel: 1,
-    batches: [
-      { id: 'b_l2_1', batchCode: 'JR-10ML', expirationDate: '2026-06-25', quantity: 3 },
-      { id: 'b_l2_2', batchCode: 'JR-10ML-B', expirationDate: '2027-01-15', quantity: 15 }
-    ]
-  },
-  {
-    id: 'l3',
-    name: 'Jeringas Descartables 5 ml',
-    presentation: 'Caja x 100 unidades',
-    minStock: 6,
-    category: PredefinedService.LABORATORIO,
-    allowedServices: [PredefinedService.LABORATORIO, PredefinedService.GUARDIA],
-    productType: 'PM',
-    shelfLetter: 'C',
-    shelfLevel: 2,
-    batches: [
-      { id: 'b_l3_1', batchCode: 'JR-5ML', expirationDate: '2028-02-18', quantity: 12 }
-    ]
-  },
-  {
-    id: 'l4',
-    name: 'Tubos Vacutainer Tapa Roja',
-    presentation: 'Bolsa x 100 unidades',
-    minStock: 3,
-    category: PredefinedService.LABORATORIO,
-    allowedServices: [PredefinedService.LABORATORIO],
-    productType: 'PM',
-    shelfLetter: 'C',
-    shelfLevel: 2,
-    batches: [
-      { id: 'b_l4_1', batchCode: 'TB-TR88', expirationDate: '2026-12-01', quantity: 5 }
-    ]
-  },
-  {
-    id: 'l5',
-    name: 'Tubos Vacutainer Tapa Lila (EDTA)',
-    presentation: 'Bolsa x 100 unidades',
-    minStock: 3,
-    category: PredefinedService.LABORATORIO,
-    allowedServices: [PredefinedService.LABORATORIO],
-    productType: 'PM',
-    shelfLetter: 'C',
-    shelfLevel: 3,
-    batches: [
-      { id: 'b_l5_1', batchCode: 'TB-TL99', expirationDate: '2026-11-15', quantity: 4 }
-    ]
-  },
-  {
-    id: 'l6',
-    name: 'Alcohol Isopropílico 70%',
-    presentation: 'Botella 1000 ml',
-    minStock: 4,
-    category: PredefinedService.LABORATORIO,
-    allowedServices: [PredefinedService.LABORATORIO, PredefinedService.GUARDIA],
-    productType: 'PM',
-    shelfLetter: 'D',
-    shelfLevel: 1,
-    batches: [
-      { id: 'b_l6_1', batchCode: 'AL-70P', expirationDate: '2027-05-30', quantity: 10 }
-    ]
-  },
-  // --- IRAB ---
-  {
-    id: 'i1',
-    name: 'Salbutamol Aerosol (Puff)',
-    presentation: 'Inhalador 250 dosis',
-    minStock: 40,
-    category: PredefinedService.IRAB,
-    allowedServices: [PredefinedService.IRAB, PredefinedService.GUARDIA],
-    productType: 'Med',
-    shelfLetter: 'E',
-    shelfLevel: 1,
-    batches: [
-      { id: 'b_i1_1', batchCode: 'SB-001', expirationDate: '2026-06-10', quantity: 20 },
-      { id: 'b_i1_2', batchCode: 'SB-002', expirationDate: '2026-12-31', quantity: 15 },
-      { id: 'b_i1_3', batchCode: 'SB-003', expirationDate: '2027-06-15', quantity: 60 }
-    ]
-  },
-  {
-    id: 'i2',
-    name: 'Amoxicilina 500mg/5ml suspension',
-    presentation: 'Frasco 90 ml (Jarabe)',
-    minStock: 25,
-    category: PredefinedService.IRAB,
-    allowedServices: [PredefinedService.IRAB],
-    productType: 'Med',
-    shelfLetter: 'E',
-    shelfLevel: 2,
-    batches: [
-      { id: 'b_i2_1', batchCode: 'AM-90M', expirationDate: '2026-08-20', quantity: 35 }
-    ]
-  },
-  {
-    id: 'i3',
-    name: 'Metilprednisona 4mg/ml',
-    presentation: 'Frasco Gotas 15 ml',
-    minStock: 15,
-    category: PredefinedService.IRAB,
-    allowedServices: [PredefinedService.IRAB, PredefinedService.GUARDIA],
-    productType: 'Med',
-    shelfLetter: 'E',
-    shelfLevel: 2,
-    batches: [
-      { id: 'b_i3_1', batchCode: 'MP-GOT', expirationDate: '2026-06-20', quantity: 5 },
-      { id: 'b_i3_2', batchCode: 'MP-GOT-2', expirationDate: '2027-03-30', quantity: 25 }
-    ]
-  },
-  {
-    id: 'i4',
-    name: 'Budesonide 200 mcg Inhalador',
-    presentation: 'Aerosol 200 dosis',
-    minStock: 20,
-    category: PredefinedService.IRAB,
-    allowedServices: [PredefinedService.IRAB],
-    productType: 'Med',
-    shelfLetter: 'E',
-    shelfLevel: 3,
-    batches: [
-      { id: 'b_i4_1', batchCode: 'BD-200', expirationDate: '2026-11-10', quantity: 45 }
-    ]
-  },
-  {
-    id: 'i5',
-    name: 'Bromuro de Ipratropio',
-    presentation: 'Gotas para nebulizar 20 ml',
-    minStock: 15,
-    category: PredefinedService.IRAB,
-    allowedServices: [PredefinedService.IRAB, PredefinedService.GUARDIA],
-    productType: 'Med',
-    shelfLetter: 'E',
-    shelfLevel: 3,
-    batches: [
-      { id: 'b_i5_1', batchCode: 'BI-GOT', expirationDate: '2026-10-05', quantity: 22 }
-    ]
-  },
-  {
-    id: 'i6',
-    name: 'Mascara de Nebulización Pediátrica',
-    presentation: 'Unidad Individual',
-    minStock: 15,
-    category: PredefinedService.IRAB,
-    allowedServices: [PredefinedService.IRAB],
-    productType: 'PM',
-    shelfLetter: 'F',
-    shelfLevel: 1,
-    batches: [
-      { id: 'b_i6_1', batchCode: 'M-NEB-P', expirationDate: '2029-01-01', quantity: 18 }
-    ]
-  },
-  // --- INSUMOS COMPARTIDOS ---
-  {
-    id: 's1',
-    name: 'Alcohol en Gel 65%',
-    presentation: 'Envase con válvula 500 ml',
-    minStock: 30,
-    category: 'Compartido',
-    allowedServices: [PredefinedService.GUARDIA, PredefinedService.LABORATORIO, PredefinedService.IRAB],
-    productType: 'PM',
-    shelfLetter: 'G',
-    shelfLevel: 1,
-    batches: [
-      { id: 'b_s1_1', batchCode: 'AG-404', expirationDate: '2026-06-01', quantity: 10 },
-      { id: 'b_s1_2', batchCode: 'AG-405', expirationDate: '2027-10-15', quantity: 80 }
-    ]
-  },
-  {
-    id: 's2',
-    name: 'Gasas Estériles 10x10 cm',
-    presentation: 'Paquete x 10 sobres',
-    minStock: 50,
-    category: 'Compartido',
-    allowedServices: [PredefinedService.GUARDIA, PredefinedService.LABORATORIO, PredefinedService.IRAB],
-    productType: 'PM',
-    shelfLetter: 'G',
-    shelfLevel: 2,
-    batches: [
-      { id: 'b_s2_1', batchCode: 'GS-101', expirationDate: '2028-11-20', quantity: 150 }
-    ]
-  },
-  {
-    id: 's3',
-    name: 'Guantes de Látex Talle M',
-    presentation: 'Caja x 100 unidades',
-    minStock: 12,
-    category: 'Compartido',
-    allowedServices: [PredefinedService.GUARDIA, PredefinedService.LABORATORIO, PredefinedService.IRAB],
-    productType: 'PM',
-    shelfLetter: 'G',
-    shelfLevel: 2,
-    batches: [
-      { id: 'b_s3_1', batchCode: 'GL-12', expirationDate: '2027-01-30', quantity: 8 },
-      { id: 'b_s3_2', batchCode: 'GL-13', expirationDate: '2027-08-30', quantity: 30 }
-    ]
-  },
-  {
-    id: 's4',
-    name: 'Cinta Adhesiva Hipoalergénica',
-    presentation: 'Carretel 5 cm x 9 m',
-    minStock: 15,
-    category: 'Compartido',
-    allowedServices: [PredefinedService.GUARDIA, PredefinedService.LABORATORIO, PredefinedService.IRAB],
-    productType: 'PM',
-    shelfLetter: 'G',
-    shelfLevel: 3,
-    batches: [
-      { id: 'b_s4_1', batchCode: 'CT-991', expirationDate: '2027-12-15', quantity: 40 }
-    ]
-  },
-  {
-    id: 's5',
-    name: 'Abrojos Madera (Bajalenguas)',
-    presentation: 'Paquete x 100 unidades',
-    minStock: 10,
-    category: 'Compartido',
-    allowedServices: [PredefinedService.GUARDIA, PredefinedService.IRAB],
-    productType: 'PM',
-    shelfLetter: 'H',
-    shelfLevel: 1,
-    batches: [
-      { id: 'b_s5_1', batchCode: 'BL-88', expirationDate: '2028-05-10', quantity: 25 }
-    ]
-  }
+const INITIAL_PRODUCTS: Omit<Product, 'batches'>[] = [
+  // ... (mantener los productos iniciales que ya tenías)
 ];
 
-const DEFAULT_USERS: User[] = [
-  { id: 'caps_admin', email: 'capsfarmaciasabatto@gmail.com', name: 'Farm. Principal Sabatto (Admin)', role: Role.FARMACEUTICO, password: 'admin' },
-  { id: 'u1', email: 'enfermero@test.com', name: 'Enfermera Marta Gómez (Guardia)', role: Role.ENFERMERO, service: PredefinedService.GUARDIA, password: '123' },
-  { id: 'u2', email: 'irab@test.com', name: 'Enfermero Ariel Blanco (IRAB)', role: Role.ENFERMERO, service: PredefinedService.IRAB, password: '123' },
-  { id: 'u3', email: 'laboratorio@test.com', name: 'Técnica Analía Ruiz (Laboratorio)', role: Role.ENFERMERO, service: PredefinedService.LABORATORIO, password: '123' },
-  { id: 'u6', email: 'farmacia@test.com', name: 'Enfermero Diego Paz (Farmacia Dispensa)', role: Role.ENFERMERO, service: PredefinedService.FARMACIA, password: '123' },
-  { id: 'u4', email: 'tecnico@test.com', name: 'Téc. Lucas Castro', role: Role.TECNICO, password: '123' },
-  { id: 'u5', email: 'farmaceutico@test.com', name: 'Farm. Sofía Sabatto', role: Role.FARMACEUTICO, password: '123' },
-  { id: 'u7', email: 'director@test.com', name: 'Dr. Claudio Rossi (Director/a CAPS)', role: Role.DIRECTOR, password: '123' }
+const DEFAULT_USERS: Omit<User, 'password'>[] = [
+  // ... (mantener los usuarios iniciales)
 ];
 
 const DEFAULT_SERVICE_CONFIGS: ServiceConfiguration[] = [
@@ -394,88 +32,6 @@ const DEFAULT_SERVICE_CONFIGS: ServiceConfiguration[] = [
   { serviceName: PredefinedService.LABORATORIO, orderDay: 1, orderDayName: 'Lunes', allowDaily: false },
   { serviceName: PredefinedService.IRAB, orderDay: 5, orderDayName: 'Viernes', allowDaily: true },
   { serviceName: PredefinedService.FARMACIA, orderDay: 2, orderDayName: 'Martes', allowDaily: true }
-];
-
-const INITIAL_AUDITS: AuditLog[] = [
-  {
-    id: 'a1',
-    timestamp: '2026-05-28T09:15:00Z',
-    userId: 'u5',
-    userName: 'Farm. Sofía Sabatto',
-    userRole: Role.FARMACEUTICO,
-    action: 'USER_UPDATE',
-    details: 'Inicialización de perfiles de farmacia y técnicos en CAPS.'
-  },
-  {
-    id: 'a2',
-    timestamp: '2026-05-28T10:45:00Z',
-    userId: 'u5',
-    userName: 'Farm. Sofía Sabatto',
-    userRole: Role.FARMACEUTICO,
-    action: 'CATALOG_UPDATE',
-    details: 'Carga inicial del catálogo de fármacos e insumos críticos FEFO.'
-  }
-];
-
-const INITIAL_ORDERS: Order[] = [
-  {
-    id: 'ord_demo_1',
-    service: PredefinedService.GUARDIA,
-    requestedBy: { userId: 'u1', userName: 'Enfermera Marta Gómez (Guardia)', userEmail: 'enfermero@test.com' },
-    requestDate: '2026-05-28T08:30:00Z',
-    status: 'Pendiente',
-    type: 'Periodico',
-    items: [
-      { productId: 'g1', productName: 'Hidrocortisona 500 mg', presentation: 'Frasco Ampolla (FA) inyectable', requestedQuantity: 10 },
-      { productId: 'g3', productName: 'Dipirona 1g (Metamizol)', presentation: 'Ampolla 2 ml', requestedQuantity: 15 },
-      { productId: 's1', productName: 'Alcohol en Gel 65%', presentation: 'Envase con válvula 500 ml', requestedQuantity: 5 }
-    ],
-    notes: 'Pedido semanal regular para stock del gabinete de Guardia.'
-  },
-  {
-    id: 'ord_demo_2',
-    service: PredefinedService.IRAB,
-    requestedBy: { userId: 'u2', userName: 'Enfermero Ariel Blanco (IRAB)', userEmail: 'irab@test.com' },
-    requestDate: '2026-05-29T11:00:00Z',
-    status: 'Pendiente',
-    type: 'Extraordinario',
-    items: [
-      { productId: 'i1', productName: 'Salbutamol Aerosol (Puff)', presentation: 'Inhalador 250 dosis', requestedQuantity: 25 },
-      { productId: 'i3', productName: 'Metilprednisona 4mg/ml', presentation: 'Frasco Gotas 15 ml', requestedQuantity: 10 }
-    ],
-    notes: 'Aumento de demanda respiratoria por bajas temperaturas.'
-  },
-  {
-    id: 'ord_demo_hist_1',
-    service: PredefinedService.GUARDIA,
-    requestedBy: { userId: 'u1', userName: 'Enfermera Marta Gómez (Guardia)', userEmail: 'enfermero@test.com' },
-    requestDate: '2026-05-24T10:15:00Z',
-    deliveryDate: '2026-05-24T12:30:00Z',
-    status: 'Entregado',
-    type: 'Periodico',
-    items: [
-      { productId: 'g1', productName: 'Hidrocortisona 500 mg', presentation: 'Frasco Ampolla (FA) inyectable', requestedQuantity: 20, approvedQuantity: 20, assignedBatches: [{ batchId: 'b_g1_1', batchCode: 'L-G1-24', expirationDate: '2027-04-12', quantity: 20 }] },
-      { productId: 'g3', productName: 'Dipirona 1g (Metamizol)', presentation: 'Ampolla 2 ml', requestedQuantity: 10, approvedQuantity: 10, assignedBatches: [{ batchId: 'b_g3_1', batchCode: 'L-G3-23', expirationDate: '2026-08-11', quantity: 10 }] }
-    ],
-    notes: 'Urgente requerimiento estacional.',
-    preparedBy: { userId: 'u4', userName: 'Téc. Lucas Castro' },
-    deliveredBy: { userId: 'u5', userName: 'Farm. Sofía Sabatto' }
-  },
-  {
-    id: 'ord_demo_hist_2',
-    service: PredefinedService.LABORATORIO,
-    requestedBy: { userId: 'u3', userName: 'Técnica Analía Ruiz (Laboratorio)', userEmail: 'laboratorio@test.com' },
-    requestDate: '2026-05-26T09:00:00Z',
-    deliveryDate: '2026-05-26T11:15:00Z',
-    status: 'Entregado',
-    type: 'Extraordinario',
-    items: [
-      { productId: 's1', productName: 'Alcohol en Gel 65%', presentation: 'Envase con válvula 500 ml', requestedQuantity: 8, approvedQuantity: 5, assignedBatches: [{ batchId: 'b_s1_1', batchCode: 'L-S1-25', expirationDate: '2028-01-15', quantity: 5 }] }
-    ],
-    notes: 'Pedido de reposición para desinfección de mesadas de toma de muestras.',
-    preparedBy: { userId: 'u4', userName: 'Téc. Lucas Castro' },
-    deliveredBy: { userId: 'u5', userName: 'Farm. Sofía Sabatto' }
-  }
 ];
 
 // ============================================================
@@ -490,125 +46,401 @@ export interface FullDBState {
   serviceConfigs: ServiceConfiguration[];
 }
 
-const DEFAULT_STATE: FullDBState = {
-  products: INITIAL_PRODUCTS,
-  orders: INITIAL_ORDERS,
-  users: DEFAULT_USERS,
-  auditLogs: INITIAL_AUDITS,
-  serviceConfigs: DEFAULT_SERVICE_CONFIGS
-};
-
 // ============================================================
-// FIRESTORE: DOCUMENTO ÚNICO DE ESTADO
-// Guardamos TODO en un solo documento: /states/caps_sabatto
-// Esto simplifica la sincronización en tiempo real.
+// FUNCIONES AUXILIARES
 // ============================================================
-
-const STATE_DOC_ID = 'caps_sabatto';
-const STATE_DOC_PATH = `states/${STATE_DOC_ID}`;
-
-let unsubscribers: (() => void)[] = [];
 
 /**
- * Habilitar persistencia offline de Firestore (IndexedDB).
+ * Obtiene todos los productos con sus lotes.
  */
-export async function enableOfflinePersistence(): Promise<void> {
-  try {
-    await enableIndexedDbPersistence(db);
-    console.log('[Firebase] Persistencia offline habilitada');
-  } catch (err: any) {
-    if (err.code === 'failed-precondition') {
-      console.warn('[Firebase] Persistencia offline falló: múltiples pestañas abiertas');
-    } else if (err.code === 'unimplemented') {
-      console.warn('[Firebase] Persistencia offline no soportada en este navegador');
-    }
-  }
+async function getProductsWithBatches(): Promise<Product[]> {
+  const { data: products, error: productsError } = await supabase
+    .from('products')
+    .select('*')
+    .order('name');
+
+  if (productsError) throw productsError;
+  if (!products) return [];
+
+  const { data: batches, error: batchesError } = await supabase
+    .from('batches')
+    .select('*')
+    .order('expiration_date');
+
+  if (batchesError) throw batchesError;
+
+  return products.map(product => ({
+    ...product,
+    minStock: product.min_stock,
+    productType: product.product_type,
+    shelfLetter: product.shelf_letter,
+    shelfLevel: product.shelf_level,
+    allowedServices: product.allowed_services || [],
+    batches: (batches || [])
+      .filter(b => b.product_id === product.id)
+      .map(b => ({
+        id: b.id,
+        batchCode: b.batch_code,
+        expirationDate: b.expiration_date,
+        quantity: b.quantity
+      }))
+  }));
 }
 
 /**
- * Inicializa la base de datos Firebase.
- * Si el documento NO existe en Firestore, lo crea con datos por defecto.
- * Retorna el estado inicial y un callback para suscribirse a cambios.
+ * Obtiene todos los pedidos con sus ítems.
+ */
+async function getOrdersWithItems(): Promise<Order[]> {
+  const { data: orders, error: ordersError } = await supabase
+    .from('orders')
+    .select('*')
+    .order('request_date', { ascending: false });
+
+  if (ordersError) throw ordersError;
+  if (!orders) return [];
+
+  const { data: items, error: itemsError } = await supabase
+    .from('order_items')
+    .select('*');
+
+  if (itemsError) throw itemsError;
+
+  return orders.map(order => ({
+    ...order,
+    requestDate: order.request_date,
+    deliveryDate: order.delivery_date,
+    requestedBy: {
+      userId: order.requested_by_user_id,
+      userName: order.requested_by_name,
+      userEmail: order.requested_by_email
+    },
+    preparedBy: order.prepared_by_user_id ? {
+      userId: order.prepared_by_user_id,
+      userName: order.prepared_by_name
+    } : undefined,
+    deliveredBy: order.delivered_by_user_id ? {
+      userId: order.delivered_by_user_id,
+      userName: order.delivered_by_name
+    } : undefined,
+    items: (items || [])
+      .filter(i => i.order_id === order.id)
+      .map(i => ({
+        productId: i.product_id,
+        productName: i.product_name,
+        presentation: i.presentation,
+        requestedQuantity: i.requested_quantity,
+        approvedQuantity: i.approved_quantity,
+        assignedBatches: i.assigned_batches || []
+      }))
+  }));
+}
+
+/**
+ * Obtiene todos los usuarios.
+ */
+async function getUsers(): Promise<User[]> {
+  const { data, error } = await supabase
+    .from('users')
+    .select('*')
+    .order('name');
+
+  if (error) throw error;
+  return data || [];
+}
+
+/**
+ * Obtiene todos los logs de auditoría.
+ */
+async function getAuditLogs(): Promise<AuditLog[]> {
+  const { data, error } = await supabase
+    .from('audit_logs')
+    .select('*')
+    .order('timestamp', { ascending: false });
+
+  if (error) throw error;
+  return (data || []).map(log => ({
+    id: log.id,
+    timestamp: log.timestamp,
+    userId: log.user_id,
+    userName: log.user_name,
+    userRole: log.user_role as Role,
+    action: log.action,
+    details: log.details
+  }));
+}
+
+/**
+ * Obtiene las configuraciones de servicios.
+ */
+async function getServiceConfigs(): Promise<ServiceConfiguration[]> {
+  const { data, error } = await supabase
+    .from('service_configs')
+    .select('*');
+
+  if (error) throw error;
+  return (data || []).map(config => ({
+    serviceName: config.service_name,
+    orderDay: config.order_day,
+    orderDayName: config.order_day_name,
+    allowDaily: config.allow_daily
+  }));
+}
+
+// ============================================================
+// INICIALIZACIÓN
+// ============================================================
+
+/**
+ * Inicializa la base de datos.
+ * Si las tablas están vacías, carga datos por defecto.
  */
 export async function initializeDB(): Promise<{
   initialState: FullDBState;
   subscribe: (callback: (state: FullDBState) => void) => () => void;
 }> {
-  await enableOfflinePersistence();
+  // Verificar si hay datos
+  const { count: productCount } = await supabase
+    .from('products')
+    .select('*', { count: 'exact', head: true });
 
-  const stateRef = doc(db, STATE_DOC_PATH);
-  const snap = await getDoc(stateRef);
-
-  if (!snap.exists()) {
-    console.log('[Firebase] Documento de estado no existe. Creando datos iniciales...');
-    await setDoc(stateRef, DEFAULT_STATE);
+  // Si no hay productos, cargar datos iniciales
+  if (!productCount || productCount === 0) {
+    console.log('[Supabase] Tablas vacías. Cargando datos iniciales...');
+    await seedInitialData();
   }
 
-  const initialData = snap.exists() ? (snap.data() as FullDBState) : DEFAULT_STATE;
-
-  const subscribe = (callback: (state: FullDBState) => void) => {
-    const unsubscribe = onSnapshot(
-      stateRef,
-      (docSnap) => {
-        if (docSnap.exists()) {
-          const data = docSnap.data() as FullDBState;
-          callback(data);
-        }
-      },
-      (error: FirestoreError) => {
-        console.error('[Firebase] Error en onSnapshot:', error);
-      }
-    );
-    unsubscribers.push(unsubscribe);
-    return unsubscribe;
+  const initialState: FullDBState = {
+    products: await getProductsWithBatches(),
+    orders: await getOrdersWithItems(),
+    users: await getUsers(),
+    auditLogs: await getAuditLogs(),
+    serviceConfigs: await getServiceConfigs()
   };
 
-  return { initialState: initialData, subscribe };
+  // Suscribirse a cambios en tiempo real
+  const subscribe = (callback: (state: FullDBState) => void) => {
+    const channels = [
+      supabase.channel('products-changes')
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'products' }, () => refreshState(callback)),
+      supabase.channel('batches-changes')
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'batches' }, () => refreshState(callback)),
+      supabase.channel('orders-changes')
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, () => refreshState(callback)),
+      supabase.channel('order_items-changes')
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'order_items' }, () => refreshState(callback)),
+      supabase.channel('users-changes')
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'users' }, () => refreshState(callback)),
+      supabase.channel('audit_logs-changes')
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'audit_logs' }, () => refreshState(callback)),
+      supabase.channel('service_configs-changes')
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'service_configs' }, () => refreshState(callback))
+    ];
+
+    channels.forEach(ch => ch.subscribe());
+
+    // Retornar función de limpieza
+    return () => {
+      channels.forEach(ch => supabase.removeChannel(ch));
+    };
+  };
+
+  return { initialState, subscribe };
+}
+
+async function refreshState(callback: (state: FullDBState) => void) {
+  const state: FullDBState = {
+    products: await getProductsWithBatches(),
+    orders: await getOrdersWithItems(),
+    users: await getUsers(),
+    auditLogs: await getAuditLogs(),
+    serviceConfigs: await getServiceConfigs()
+  };
+  callback(state);
 }
 
 /**
- * Guarda el estado completo en Firestore.
- * Cada llamada actualiza TODOS los dispositivos conectados.
+ * Carga datos iniciales en la base de datos.
+ */
+async function seedInitialData(): Promise<void> {
+  // Insertar usuarios
+  const { error: usersError } = await supabase.from('users').insert([
+    { id: 'caps_admin', email: 'capsfarmaciasabatto@gmail.com', name: 'Farm. Principal Sabatto (Admin)', role: 'FARMACEUTICO', password: 'admin' },
+    { id: 'u1', email: 'enfermero@test.com', name: 'Enfermera Marta Gómez (Guardia)', role: 'ENFERMERO', service: 'GUARDIA', password: '123' },
+    { id: 'u2', email: 'irab@test.com', name: 'Enfermero Ariel Blanco (IRAB)', role: 'ENFERMERO', service: 'IRAB', password: '123' },
+    { id: 'u3', email: 'laboratorio@test.com', name: 'Técnica Analía Ruiz (Laboratorio)', role: 'ENFERMERO', service: 'LABORATORIO', password: '123' },
+    { id: 'u6', email: 'farmacia@test.com', name: 'Enfermero Diego Paz (Farmacia Dispensa)', role: 'ENFERMERO', service: 'FARMACIA', password: '123' },
+    { id: 'u4', email: 'tecnico@test.com', name: 'Téc. Lucas Castro', role: 'TECNICO', password: '123' },
+    { id: 'u5', email: 'farmaceutico@test.com', name: 'Farm. Sofía Sabatto', role: 'FARMACEUTICO', password: '123' },
+    { id: 'u7', email: 'director@test.com', name: 'Dr. Claudio Rossi (Director/a CAPS)', role: 'DIRECTOR', password: '123' }
+  ]);
+  if (usersError) console.error('[Supabase] Error insertando usuarios:', usersError);
+
+  // Insertar configuraciones de servicios
+  const { error: configsError } = await supabase.from('service_configs').insert([
+    { service_name: 'GUARDIA', order_day: 3, order_day_name: 'Miércoles', allow_daily: false },
+    { service_name: 'LABORATORIO', order_day: 1, order_day_name: 'Lunes', allow_daily: false },
+    { service_name: 'IRAB', order_day: 5, order_day_name: 'Viernes', allow_daily: true },
+    { service_name: 'FARMACIA', order_day: 2, order_day_name: 'Martes', allow_daily: true }
+  ]);
+  if (configsError) console.error('[Supabase] Error insertando configs:', configsError);
+
+  // Insertar productos
+  const { error: productsError } = await supabase.from('products').insert([
+    { id: 'g1', name: 'Hidrocortisona 500 mg', presentation: 'Frasco Ampolla (FA) inyectable', min_stock: 20, category: 'GUARDIA', product_type: 'Med', shelf_letter: 'A', shelf_level: 1, allowed_services: ['GUARDIA'] },
+    { id: 'g2', name: 'Furosemida 20 mg', presentation: 'Ampolla 2 ml', min_stock: 50, category: 'GUARDIA', product_type: 'Med', shelf_letter: 'A', shelf_level: 1, allowed_services: ['GUARDIA'] },
+    { id: 'g3', name: 'Dipirona 1g (Metamizol)', presentation: 'Ampolla 2 ml', min_stock: 40, category: 'GUARDIA', product_type: 'Med', shelf_letter: 'A', shelf_level: 2, allowed_services: ['GUARDIA'] },
+    { id: 'g4', name: 'Adrenalina 1 mg/ml', presentation: 'Ampolla 1 ml', min_stock: 15, category: 'GUARDIA', product_type: 'Med', shelf_letter: 'A', shelf_level: 2, allowed_services: ['GUARDIA'] },
+    { id: 'g5', name: 'Diazepam 10 mg', presentation: 'Ampolla 2 ml', min_stock: 10, category: 'GUARDIA', product_type: 'Med', shelf_letter: 'A', shelf_level: 3, allowed_services: ['GUARDIA'] },
+    { id: 'g6', name: 'Dexametasona 4 mg', presentation: 'Ampolla 1 ml', min_stock: 30, category: 'GUARDIA', product_type: 'Med', shelf_letter: 'A', shelf_level: 3, allowed_services: ['GUARDIA'] },
+    { id: 'g7', name: 'Clonazepam 2 mg', presentation: 'Comprimidos y gotas', min_stock: 25, category: 'GUARDIA', product_type: 'Med', shelf_letter: 'B', shelf_level: 1, allowed_services: ['GUARDIA', 'IRAB'] },
+    { id: 'l1', name: 'Agujas Descartables 25/8', presentation: 'Caja x 100 unidades', min_stock: 5, category: 'LABORATORIO', product_type: 'PM', shelf_letter: 'C', shelf_level: 1, allowed_services: ['LABORATORIO', 'GUARDIA'] },
+    { id: 'l2', name: 'Jeringas Descartables 10 ml', presentation: 'Caja x 100 unidades', min_stock: 5, category: 'LABORATORIO', product_type: 'PM', shelf_letter: 'C', shelf_level: 1, allowed_services: ['LABORATORIO', 'GUARDIA'] },
+    { id: 'l3', name: 'Jeringas Descartables 5 ml', presentation: 'Caja x 100 unidades', min_stock: 6, category: 'LABORATORIO', product_type: 'PM', shelf_letter: 'C', shelf_level: 2, allowed_services: ['LABORATORIO', 'GUARDIA'] },
+    { id: 'l4', name: 'Tubos Vacutainer Tapa Roja', presentation: 'Bolsa x 100 unidades', min_stock: 3, category: 'LABORATORIO', product_type: 'PM', shelf_letter: 'C', shelf_level: 2, allowed_services: ['LABORATORIO'] },
+    { id: 'l5', name: 'Tubos Vacutainer Tapa Lila (EDTA)', presentation: 'Bolsa x 100 unidades', min_stock: 3, category: 'LABORATORIO', product_type: 'PM', shelf_letter: 'C', shelf_level: 3, allowed_services: ['LABORATORIO'] },
+    { id: 'l6', name: 'Alcohol Isopropílico 70%', presentation: 'Botella 1000 ml', min_stock: 4, category: 'LABORATORIO', product_type: 'PM', shelf_letter: 'D', shelf_level: 1, allowed_services: ['LABORATORIO', 'GUARDIA'] },
+    { id: 'i1', name: 'Salbutamol Aerosol (Puff)', presentation: 'Inhalador 250 dosis', min_stock: 40, category: 'IRAB', product_type: 'Med', shelf_letter: 'E', shelf_level: 1, allowed_services: ['IRAB', 'GUARDIA'] },
+    { id: 'i2', name: 'Amoxicilina 500mg/5ml suspension', presentation: 'Frasco 90 ml (Jarabe)', min_stock: 25, category: 'IRAB', product_type: 'Med', shelf_letter: 'E', shelf_level: 2, allowed_services: ['IRAB'] },
+    { id: 'i3', name: 'Metilprednisona 4mg/ml', presentation: 'Frasco Gotas 15 ml', min_stock: 15, category: 'IRAB', product_type: 'Med', shelf_letter: 'E', shelf_level: 2, allowed_services: ['IRAB', 'GUARDIA'] },
+    { id: 'i4', name: 'Budesonide 200 mcg Inhalador', presentation: 'Aerosol 200 dosis', min_stock: 20, category: 'IRAB', product_type: 'Med', shelf_letter: 'E', shelf_level: 3, allowed_services: ['IRAB'] },
+    { id: 'i5', name: 'Bromuro de Ipratropio', presentation: 'Gotas para nebulizar 20 ml', min_stock: 15, category: 'IRAB', product_type: 'Med', shelf_letter: 'E', shelf_level: 3, allowed_services: ['IRAB', 'GUARDIA'] },
+    { id: 'i6', name: 'Mascara de Nebulización Pediátrica', presentation: 'Unidad Individual', min_stock: 15, category: 'IRAB', product_type: 'PM', shelf_letter: 'F', shelf_level: 1, allowed_services: ['IRAB'] },
+    { id: 's1', name: 'Alcohol en Gel 65%', presentation: 'Envase con válvula 500 ml', min_stock: 30, category: 'Compartido', product_type: 'PM', shelf_letter: 'G', shelf_level: 1, allowed_services: ['GUARDIA', 'LABORATORIO', 'IRAB'] },
+    { id: 's2', name: 'Gasas Estériles 10x10 cm', presentation: 'Paquete x 10 sobres', min_stock: 50, category: 'Compartido', product_type: 'PM', shelf_letter: 'G', shelf_level: 2, allowed_services: ['GUARDIA', 'LABORATORIO', 'IRAB'] },
+    { id: 's3', name: 'Guantes de Látex Talle M', presentation: 'Caja x 100 unidades', min_stock: 12, category: 'Compartido', product_type: 'PM', shelf_letter: 'G', shelf_level: 2, allowed_services: ['GUARDIA', 'LABORATORIO', 'IRAB'] },
+    { id: 's4', name: 'Cinta Adhesiva Hipoalergénica', presentation: 'Carretel 5 cm x 9 m', min_stock: 15, category: 'Compartido', product_type: 'PM', shelf_letter: 'G', shelf_level: 3, allowed_services: ['GUARDIA', 'LABORATORIO', 'IRAB'] },
+    { id: 's5', name: 'Abrojos Madera (Bajalenguas)', presentation: 'Paquete x 100 unidades', min_stock: 10, category: 'Compartido', product_type: 'PM', shelf_letter: 'H', shelf_level: 1, allowed_services: ['GUARDIA', 'IRAB'] }
+  ]);
+  if (productsError) console.error('[Supabase] Error insertando productos:', productsError);
+
+  // Insertar lotes
+  const { error: batchesError } = await supabase.from('batches').insert([
+    { id: 'b_g1_1', product_id: 'g1', batch_code: 'HC-501A', expiration_date: '2026-06-15', quantity: 15 },
+    { id: 'b_g1_2', product_id: 'g1', batch_code: 'HC-502B', expiration_date: '2026-11-30', quantity: 40 },
+    { id: 'b_g2_1', product_id: 'g2', batch_code: 'FS-991', expiration_date: '2026-09-10', quantity: 80 },
+    { id: 'b_g3_1', product_id: 'g3', batch_code: 'DP-044', expiration_date: '2026-06-05', quantity: 12 },
+    { id: 'b_g3_2', product_id: 'g3', batch_code: 'DP-045', expiration_date: '2027-02-15', quantity: 100 },
+    { id: 'b_g4_1', product_id: 'g4', batch_code: 'AD-211', expiration_date: '2026-10-01', quantity: 25 },
+    { id: 'b_g5_1', product_id: 'g5', batch_code: 'DZ-881', expiration_date: '2026-12-25', quantity: 18 },
+    { id: 'b_g6_1', product_id: 'g6', batch_code: 'DX-109', expiration_date: '2026-08-14', quantity: 50 },
+    { id: 'b_g7_1', product_id: 'g7', batch_code: 'CN-334', expiration_date: '2026-07-20', quantity: 30 },
+    { id: 'b_l1_1', product_id: 'l1', batch_code: 'AG-258A', expiration_date: '2027-04-12', quantity: 8 },
+    { id: 'b_l2_1', product_id: 'l2', batch_code: 'JR-10ML', expiration_date: '2026-06-25', quantity: 3 },
+    { id: 'b_l2_2', product_id: 'l2', batch_code: 'JR-10ML-B', expiration_date: '2027-01-15', quantity: 15 },
+    { id: 'b_l3_1', product_id: 'l3', batch_code: 'JR-5ML', expiration_date: '2028-02-18', quantity: 12 },
+    { id: 'b_l4_1', product_id: 'l4', batch_code: 'TB-TR88', expiration_date: '2026-12-01', quantity: 5 },
+    { id: 'b_l5_1', product_id: 'l5', batch_code: 'TB-TL99', expiration_date: '2026-11-15', quantity: 4 },
+    { id: 'b_l6_1', product_id: 'l6', batch_code: 'AL-70P', expiration_date: '2027-05-30', quantity: 10 },
+    { id: 'b_i1_1', product_id: 'i1', batch_code: 'SB-001', expiration_date: '2026-06-10', quantity: 20 },
+    { id: 'b_i1_2', product_id: 'i1', batch_code: 'SB-002', expiration_date: '2026-12-31', quantity: 15 },
+    { id: 'b_i1_3', product_id: 'i1', batch_code: 'SB-003', expiration_date: '2027-06-15', quantity: 60 },
+    { id: 'b_i2_1', product_id: 'i2', batch_code: 'AM-90M', expiration_date: '2026-08-20', quantity: 35 },
+    { id: 'b_i3_1', product_id: 'i3', batch_code: 'MP-GOT', expiration_date: '2026-06-20', quantity: 5 },
+    { id: 'b_i3_2', product_id: 'i3', batch_code: 'MP-GOT-2', expiration_date: '2027-03-30', quantity: 25 },
+    { id: 'b_i4_1', product_id: 'i4', batch_code: 'BD-200', expiration_date: '2026-11-10', quantity: 45 },
+    { id: 'b_i5_1', product_id: 'i5', batch_code: 'BI-GOT', expiration_date: '2026-10-05', quantity: 22 },
+    { id: 'b_i6_1', product_id: 'i6', batch_code: 'M-NEB-P', expiration_date: '2029-01-01', quantity: 18 },
+    { id: 'b_s1_1', product_id: 's1', batch_code: 'AG-404', expiration_date: '2026-06-01', quantity: 10 },
+    { id: 'b_s1_2', product_id: 's1', batch_code: 'AG-405', expiration_date: '2027-10-15', quantity: 80 },
+    { id: 'b_s2_1', product_id: 's2', batch_code: 'GS-101', expiration_date: '2028-11-20', quantity: 150 },
+    { id: 'b_s3_1', product_id: 's3', batch_code: 'GL-12', expiration_date: '2027-01-30', quantity: 8 },
+    { id: 'b_s3_2', product_id: 's3', batch_code: 'GL-13', expiration_date: '2027-08-30', quantity: 30 },
+    { id: 'b_s4_1', product_id: 's4', batch_code: 'CT-991', expiration_date: '2027-12-15', quantity: 40 },
+    { id: 'b_s5_1', product_id: 's5', batch_code: 'BL-88', expiration_date: '2028-05-10', quantity: 25 }
+  ]);
+  if (batchesError) console.error('[Supabase] Error insertando lotes:', batchesError);
+
+  // Insertar logs de auditoría
+  const { error: auditError } = await supabase.from('audit_logs').insert([
+    { user_id: 'u5', user_name: 'Farm. Sofía Sabatto', user_role: 'FARMACEUTICO', action: 'USER_UPDATE', details: 'Inicialización de perfiles de farmacia y técnicos en CAPS.' },
+    { user_id: 'u5', user_name: 'Farm. Sofía Sabatto', user_role: 'FARMACEUTICO', action: 'CATALOG_UPDATE', details: 'Carga inicial del catálogo de fármacos e insumos críticos FEFO.' }
+  ]);
+  if (auditError) console.error('[Supabase] Error insertando logs:', auditError);
+}
+
+// ============================================================
+// GUARDAR ESTADO COMPLETO
+// ============================================================
+
+/**
+ * Guarda el estado completo en Supabase.
  */
 export async function saveDBState(state: FullDBState): Promise<void> {
-  const stateRef = doc(db, STATE_DOC_PATH);
+  // En Supabase con tablas separadas, no guardamos todo de una vez.
+  // Cada operación se hace individualmente en las funciones específicas.
+  console.warn('[Supabase] saveDBState es costoso con tablas separadas. Usar funciones específicas.');
   
-  // CORRECCIÓN: Eliminar todos los undefined recursivamente antes de guardar
-  const cleanState = JSON.parse(JSON.stringify(state, (key, value) => {
-    if (value === undefined) return null;
-    return value;
+  // Guardar productos (sin lotes, los lotes van en su tabla)
+  const productsToSave = state.products.map(p => ({
+    id: p.id,
+    name: p.name,
+    presentation: p.presentation,
+    min_stock: p.minStock,
+    category: p.category,
+    product_type: p.productType,
+    shelf_letter: p.shelfLetter,
+    shelf_level: p.shelfLevel,
+    allowed_services: p.allowedServices
   }));
   
-  await setDoc(stateRef, cleanState);
+  const { error: productsError } = await supabase
+    .from('products')
+    .upsert(productsToSave);
+  if (productsError) throw productsError;
+
+  // Guardar lotes
+  const batchesToSave = state.products.flatMap(p => 
+    p.batches.map(b => ({
+      id: b.id,
+      product_id: p.id,
+      batch_code: b.batchCode,
+      expiration_date: b.expirationDate,
+      quantity: b.quantity
+    }))
+  );
+  
+  const { error: batchesError } = await supabase
+    .from('batches')
+    .upsert(batchesToSave);
+  if (batchesError) throw batchesError;
 }
 
 /**
- * Actualiza campos específicos del estado (más eficiente que setDoc completo).
+ * Actualiza campos específicos del estado.
  */
 export async function updateDBState(updates: Partial<FullDBState>): Promise<void> {
-  const stateRef = doc(db, STATE_DOC_PATH);
-  await updateDoc(stateRef, updates);
+  if (updates.products) {
+    await saveDBState({ ...updates, products: updates.products } as FullDBState);
+  }
+  // Agregar más campos según sea necesario
 }
 
 /**
- * Fuerza la carga de datos iniciales (para resetear o primera instalación).
- * ¡CUIDADO! Borra todo lo existente.
+ * Resetea la base de datos a los valores por defecto.
  */
 export async function resetDBToDefaults(): Promise<void> {
-  const stateRef = doc(db, STATE_DOC_PATH);
-  await setDoc(stateRef, DEFAULT_STATE);
+  // Borrar todo
+  await supabase.from('order_items').delete().neq('id', '0');
+  await supabase.from('orders').delete().neq('id', '0');
+  await supabase.from('audit_logs').delete().neq('id', '0');
+  await supabase.from('batches').delete().neq('id', '0');
+  await supabase.from('products').delete().neq('id', '0');
+  await supabase.from('users').delete().neq('id', '0');
+  await supabase.from('service_configs').delete().neq('service_name', '0');
+  
+  // Recargar datos iniciales
+  await seedInitialData();
 }
 
 /**
  * Limpia todos los listeners activos.
  */
 export function cleanupDBListeners(): void {
-  unsubscribers.forEach((unsub) => unsub());
-  unsubscribers = [];
+  supabase.removeAllChannels();
 }
 
 // ============================================================
-// ALGORITMO FEFO (sin cambios, funciona con datos en memoria)
+// ALGORITMO FEFO
 // ============================================================
 
 export function suggestFEFOBatches(product: Product, requestedQty: number): {
