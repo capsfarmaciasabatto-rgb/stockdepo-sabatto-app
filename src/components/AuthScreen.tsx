@@ -6,6 +6,7 @@
 import React, { useState } from 'react';
 import { translations } from '../translations';
 import { User, Role } from '../types';
+import { verifyPassword } from '../lib/auth';
 import farmaciaLogo from '../assets/images/farmacia_logo_1780424589468.png';
 import { KeyRound, ShieldCheck, Mail, Lock, Stethoscope } from 'lucide-react';
 
@@ -23,33 +24,30 @@ export default function AuthScreen({ users, onLoginSuccess, lang }: AuthScreenPr
 
   const t = translations[lang];
 
-  const handleLogin = (e: React.FormEvent) => {
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
     setErrorMsg('');
 
-    setTimeout(() => {
-      const foundUser = users.find(u => u.email.toLowerCase() === email.trim().toLowerCase());
-      if (foundUser) {
-        // Validación de constraseña real
-        const expectedPassword = foundUser.password || '123456';
-        if (password.trim() === expectedPassword.trim()) {
-          onLoginSuccess(foundUser);
-        } else {
-          setErrorMsg(lang === 'es' ? 'Contraseña incorrecta para el usuario.' : 'Incorrect password.');
-        }
+    const foundUser = users.find(u => u.email.toLowerCase() === email.trim().toLowerCase());
+    if (foundUser) {
+      // Validación de contraseña con bcrypt
+      const isValid = await verifyPassword(password.trim(), foundUser.password || '');
+      if (isValid) {
+        onLoginSuccess(foundUser);
       } else {
-        setErrorMsg(lang === 'es' ? 'Usuario no encontrado en los registros.' : 'User not found in system.');
+        setErrorMsg(lang === 'es' ? 'Contraseña incorrecta para el usuario.' : 'Incorrect password.');
       }
-      setLoading(false);
-    }, 600);
+    } else {
+      setErrorMsg(lang === 'es' ? 'Usuario no encontrado en los registros.' : 'User not found in system.');
+    }
+    setLoading(false);
   };
 
   const selectDemoUser = (demoEmail: string) => {
     setEmail(demoEmail);
     setPassword('');
     setErrorMsg('');
-    // Enfocar el campo de contraseña para que el usuario la tipee
     const passInput = document.getElementById('login-pass-input');
     if (passInput) {
       setTimeout(() => (passInput as HTMLInputElement).focus(), 100);
@@ -92,7 +90,7 @@ export default function AuthScreen({ users, onLoginSuccess, lang }: AuthScreenPr
             </p>
           </div>
 
-          {/* Quick Demo Logins - Multi-perfil amigable */}
+          {/* Quick Demo Logins */}
           <div className="space-y-2">
             <span className="text-[11px] uppercase tracking-wider font-extrabold text-orange-600 dark:text-orange-400 font-mono block">
               {t.demoAccount}
