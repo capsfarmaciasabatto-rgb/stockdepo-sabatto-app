@@ -4,6 +4,7 @@
  */
 
 import { supabase } from '../supabase';
+import { hashPassword } from './auth';
 import type {
   User,
   Product,
@@ -13,25 +14,6 @@ import type {
   ServiceConfiguration
 } from '../types';
 import { PredefinedService } from '../types';
-
-// ============================================================
-// DATOS INICIALES (para seeding si las tablas están vacías)
-// ============================================================
-
-const INITIAL_PRODUCTS: Omit<Product, 'batches'>[] = [
-  // ... (mantener los productos iniciales que ya tenías)
-];
-
-const DEFAULT_USERS: Omit<User, 'password'>[] = [
-  // ... (mantener los usuarios iniciales)
-];
-
-const DEFAULT_SERVICE_CONFIGS: ServiceConfiguration[] = [
-  { serviceName: PredefinedService.GUARDIA, orderDay: 3, orderDayName: 'Miércoles', allowDaily: false },
-  { serviceName: PredefinedService.LABORATORIO, orderDay: 1, orderDayName: 'Lunes', allowDaily: false },
-  { serviceName: PredefinedService.IRAB, orderDay: 5, orderDayName: 'Viernes', allowDaily: true },
-  { serviceName: PredefinedService.FARMACIA, orderDay: 2, orderDayName: 'Martes', allowDaily: true }
-];
 
 // ============================================================
 // INTERFAZ DE ESTADO COMPLETO
@@ -192,20 +174,24 @@ async function getServiceConfigs(): Promise<ServiceConfiguration[]> {
 /**
  * Inicializa la base de datos.
  * Si las tablas están vacías, carga datos por defecto.
+ * Si hay usuarios con contraseñas en texto plano, las hashea.
  */
 export async function initializeDB(): Promise<{
   initialState: FullDBState;
   subscribe: (callback: (state: FullDBState) => void) => () => void;
 }> {
-  // Verificar si hay datos
+  // Verificar si hay productos
   const { count: productCount } = await supabase
     .from('products')
     .select('*', { count: 'exact', head: true });
 
-  // Si no hay productos, cargar datos iniciales
+  // Si no hay productos, cargar datos iniciales completos
   if (!productCount || productCount === 0) {
     console.log('[Supabase] Tablas vacías. Cargando datos iniciales...');
     await seedInitialData();
+  } else {
+    // Si ya hay datos, verificar si hay usuarios con contraseñas en texto plano
+    await hashExistingPasswords();
   }
 
   const initialState: FullDBState = {
@@ -237,7 +223,6 @@ export async function initializeDB(): Promise<{
 
     channels.forEach(ch => ch.subscribe());
 
-    // Retornar función de limpieza
     return () => {
       channels.forEach(ch => supabase.removeChannel(ch));
     };
@@ -257,20 +242,70 @@ async function refreshState(callback: (state: FullDBState) => void) {
   callback(state);
 }
 
+// ============================================================
+// HASHING DE CONTRASEÑAS EXISTENTES
+// ============================================================
+
+/**
+ * Detecta usuarios con contraseñas en texto plano y las hashea.
+ * Esto se ejecuta automáticamente al iniciar la app.
+ */
+async function hashExistingPasswords(): Promise<void> {
+  const { data: users, error } = await supabase
+    .from('users')
+    .select('id, password');
+
+  if (error || !users) return;
+
+  // Detectar contraseñas en texto plano (los hashes de bcrypt empiezan con $2)
+  const plainTextUsers = users.filter(u => !u.password.startsWith('$2'));
+
+  if (plainTextUsers.length === 0) {
+    console.log('[Auth] Todas las contraseñas ya están hasheadas.');
+    return;
+  }
+
+  console.log(`[Auth] Hasheando ${plainTextUsers.length} contraseñas en texto plano...`);
+
+  for (const user of plainTextUsers) {
+    const hashed = await hashPassword(user.password);
+    
+    const { error: updateError } = await supabase
+      .from('users')
+      .update({ password: hashed })
+      .eq('id', user.id);
+
+    if (updateError) {
+      console.error(`[Auth] Error hasheando contraseña de ${user.id}:`, updateError);
+    } else {
+      console.log(`[Auth] Contraseña de ${user.id} hasheada correctamente.`);
+    }
+  }
+}
+
+// ============================================================
+// SEEDING DE DATOS INICIALES
+// ============================================================
+
 /**
  * Carga datos iniciales en la base de datos.
+ * Las contraseñas se guardan hasheadas.
  */
 async function seedInitialData(): Promise<void> {
-  // Insertar usuarios
+  // Hashear contraseñas
+  const hashedAdmin = await hashPassword('admin');
+  const hashed123 = await hashPassword('123');
+
+  // Insertar usuarios con contraseñas hasheadas
   const { error: usersError } = await supabase.from('users').insert([
-    { id: 'caps_admin', email: 'capsfarmaciasabatto@gmail.com', name: 'Farm. Principal Sabatto (Admin)', role: 'FARMACEUTICO', password: 'admin' },
-    { id: 'u1', email: 'enfermero@test.com', name: 'Enfermera Marta Gómez (Guardia)', role: 'ENFERMERO', service: 'GUARDIA', password: '123' },
-    { id: 'u2', email: 'irab@test.com', name: 'Enfermero Ariel Blanco (IRAB)', role: 'ENFERMERO', service: 'IRAB', password: '123' },
-    { id: 'u3', email: 'laboratorio@test.com', name: 'Técnica Analía Ruiz (Laboratorio)', role: 'ENFERMERO', service: 'LABORATORIO', password: '123' },
-    { id: 'u6', email: 'farmacia@test.com', name: 'Enfermero Diego Paz (Farmacia Dispensa)', role: 'ENFERMERO', service: 'FARMACIA', password: '123' },
-    { id: 'u4', email: 'tecnico@test.com', name: 'Téc. Lucas Castro', role: 'TECNICO', password: '123' },
-    { id: 'u5', email: 'farmaceutico@test.com', name: 'Farm. Sofía Sabatto', role: 'FARMACEUTICO', password: '123' },
-    { id: 'u7', email: 'director@test.com', name: 'Dr. Claudio Rossi (Director/a CAPS)', role: 'DIRECTOR', password: '123' }
+    { id: 'caps_admin', email: 'capsfarmaciasabatto@gmail.com', name: 'Farm. Principal Sabatto (Admin)', role: 'FARMACEUTICO', password: hashedAdmin },
+    { id: 'u1', email: 'enfermero@test.com', name: 'Enfermera Marta Gómez (Guardia)', role: 'ENFERMERO', service: 'GUARDIA', password: hashed123 },
+    { id: 'u2', email: 'irab@test.com', name: 'Enfermero Ariel Blanco (IRAB)', role: 'ENFERMERO', service: 'IRAB', password: hashed123 },
+    { id: 'u3', email: 'laboratorio@test.com', name: 'Técnica Analía Ruiz (Laboratorio)', role: 'ENFERMERO', service: 'LABORATORIO', password: hashed123 },
+    { id: 'u6', email: 'farmacia@test.com', name: 'Enfermero Diego Paz (Farmacia Dispensa)', role: 'ENFERMERO', service: 'FARMACIA', password: hashed123 },
+    { id: 'u4', email: 'tecnico@test.com', name: 'Téc. Lucas Castro', role: 'TECNICO', password: hashed123 },
+    { id: 'u5', email: 'farmaceutico@test.com', name: 'Farm. Sofía Sabatto', role: 'FARMACEUTICO', password: hashed123 },
+    { id: 'u7', email: 'director@test.com', name: 'Dr. Claudio Rossi (Director/a CAPS)', role: 'DIRECTOR', password: hashed123 }
   ]);
   if (usersError) console.error('[Supabase] Error insertando usuarios:', usersError);
 
@@ -365,11 +400,8 @@ async function seedInitialData(): Promise<void> {
  * Guarda el estado completo en Supabase.
  */
 export async function saveDBState(state: FullDBState): Promise<void> {
-  // En Supabase con tablas separadas, no guardamos todo de una vez.
-  // Cada operación se hace individualmente en las funciones específicas.
   console.warn('[Supabase] saveDBState es costoso con tablas separadas. Usar funciones específicas.');
   
-  // Guardar productos (sin lotes, los lotes van en su tabla)
   const productsToSave = state.products.map(p => ({
     id: p.id,
     name: p.name,
@@ -387,7 +419,6 @@ export async function saveDBState(state: FullDBState): Promise<void> {
     .upsert(productsToSave);
   if (productsError) throw productsError;
 
-  // Guardar lotes
   const batchesToSave = state.products.flatMap(p => 
     p.batches.map(b => ({
       id: b.id,
@@ -411,14 +442,12 @@ export async function updateDBState(updates: Partial<FullDBState>): Promise<void
   if (updates.products) {
     await saveDBState({ ...updates, products: updates.products } as FullDBState);
   }
-  // Agregar más campos según sea necesario
 }
 
 /**
  * Resetea la base de datos a los valores por defecto.
  */
 export async function resetDBToDefaults(): Promise<void> {
-  // Borrar todo
   await supabase.from('order_items').delete().neq('id', '0');
   await supabase.from('orders').delete().neq('id', '0');
   await supabase.from('audit_logs').delete().neq('id', '0');
@@ -427,7 +456,6 @@ export async function resetDBToDefaults(): Promise<void> {
   await supabase.from('users').delete().neq('id', '0');
   await supabase.from('service_configs').delete().neq('service_name', '0');
   
-  // Recargar datos iniciales
   await seedInitialData();
 }
 
