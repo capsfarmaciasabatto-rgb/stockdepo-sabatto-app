@@ -191,9 +191,11 @@ export async function initializeDB(): Promise<{
     await seedInitialData();
   } else {
     // Si ya hay datos, verificar si hay usuarios con contraseñas en texto plano
+    console.log('[Supabase] Datos existentes detectados. Verificando contraseñas...');
     await hashExistingPasswords();
   }
 
+  // SIEMPRE cargar el estado actual de la base de datos
   const initialState: FullDBState = {
     products: await getProductsWithBatches(),
     orders: await getOrdersWithItems(),
@@ -201,6 +203,13 @@ export async function initializeDB(): Promise<{
     auditLogs: await getAuditLogs(),
     serviceConfigs: await getServiceConfigs()
   };
+
+  console.log('[Supabase] Estado inicial cargado:', {
+    products: initialState.products.length,
+    orders: initialState.orders.length,
+    users: initialState.users.length,
+    auditLogs: initialState.auditLogs.length
+  });
 
   // Suscribirse a cambios en tiempo real
   const subscribe = (callback: (state: FullDBState) => void) => {
