@@ -10,10 +10,9 @@ import type {
   Order,
   AuditLog,
   Role,
-  PredefinedService,
-  ServiceConfiguration,
-  Batch
+  ServiceConfiguration
 } from '../types';
+import { PredefinedService } from '../types';
 
 // ============================================================
 // DATOS INICIALES (para seeding si las tablas están vacías)
