@@ -128,6 +128,20 @@ export default function AuthScreen({ users, onLoginSuccess, lang }: AuthScreenPr
                 </div>
                 <span className="text-[10px] text-zinc-400 font-mono">irab@test.com</span>
               </button>
+              
+              {/* NUEVO: Técnico Laboratorio */}
+              <button
+                id="demo_laboratorio"
+                type="button"
+                onClick={() => selectDemoUser('laboratorio@test.com')}
+                className="flex items-center justify-between text-left px-4 py-2.5 text-xs font-semibold rounded-xl bg-zinc-50 hover:bg-zinc-100 dark:bg-zinc-800/55 dark:hover:bg-zinc-800 border border-zinc-200/60 dark:border-zinc-700/60 text-zinc-700 dark:text-zinc-300 transition duration-150 cursor-pointer disabled:opacity-50"
+              >
+                <div className="flex items-center gap-2">
+                  <span className="size-2 bg-blue-500 rounded-full inline-block"></span>
+                  <span>Técnico <span className="font-mono text-zinc-400 font-normal">(Laboratorio)</span></span>
+                </div>
+                <span className="text-[10px] text-zinc-400 font-mono">laboratorio@test.com</span>
+              </button>
 
               {/* Técnico Depósito */}
               <button
@@ -141,20 +155,6 @@ export default function AuthScreen({ users, onLoginSuccess, lang }: AuthScreenPr
                   <span>{t.tecnico} <span className="font-mono text-zinc-400 font-normal">(Depósito)</span></span>
                 </div>
                 <span className="text-[10px] text-zinc-400 font-mono">tecnico@test.com</span>
-              </button>
-
-              {/* NUEVO: Técnico Laboratorio */}
-              <button
-                id="demo_laboratorio"
-                type="button"
-                onClick={() => selectDemoUser('laboratorio@test.com')}
-                className="flex items-center justify-between text-left px-4 py-2.5 text-xs font-semibold rounded-xl bg-zinc-50 hover:bg-zinc-100 dark:bg-zinc-800/55 dark:hover:bg-zinc-800 border border-zinc-200/60 dark:border-zinc-700/60 text-zinc-700 dark:text-zinc-300 transition duration-150 cursor-pointer disabled:opacity-50"
-              >
-                <div className="flex items-center gap-2">
-                  <span className="size-2 bg-blue-500 rounded-full inline-block"></span>
-                  <span>Técnico <span className="font-mono text-zinc-400 font-normal">(Laboratorio)</span></span>
-                </div>
-                <span className="text-[10px] text-zinc-400 font-mono">laboratorio@test.com</span>
               </button>
 
               {/* NUEVO: Técnico Farmacia Dispensa */}
