@@ -13,7 +13,7 @@ import TecnicoView from './components/RoleViews/TecnicoView';
 import FarmaceuticoView from './components/RoleViews/FarmaceuticoView';
 import DirectorView from './components/RoleViews/DirectorView';
 import { playBeep } from './lib/sound';
-import { Activity } from 'lucide-react';
+import { Activity, AlertCircle } from 'lucide-react';
 
 export default function App() {
   // --- CORE SYSTEM STATES ---
@@ -24,25 +24,22 @@ export default function App() {
   const [soundMuted, setSoundMuted] = useState<boolean>(false);
   const [transitionLoading, setTransitionLoading] = useState<boolean>(false);
   const [transitionText, setTransitionText] = useState<string>('');
+  const [initError, setInitError] = useState<string | null>(null);
 
   // Centro de alertas activas
   const [activeAlerts, setActiveAlerts] = useState<{ id: string; text: string; type: 'critical' | 'new_order' | 'info' | 'expiring' }[]>([]);
 
-  // Simulación de Último Día Hábil de Mes (Para testing y demostración interactiva)
+  // Simulación de Último Día Hábil de Mes
   const [simulateLastBusinessDay, setSimulateLastBusinessDay] = useState<boolean>(false);
 
-  // Selector de ordenamiento de insumos (Nombre A-Z, Z-A, Medicamentos primero, PM primero)
+  // Selector de ordenamiento de insumos
   const [productSortOrder, setProductSortOrder] = useState<'name-asc' | 'name-desc' | 'type-med' | 'type-pm'>('name-asc');
 
-
-  // Función para determinar si una fecha es el último día hábil del mes (Lunes-Viernes)
   const isLastBusinessDayOfMonth = (date: Date = new Date()): boolean => {
     const y = date.getFullYear();
     const m = date.getMonth();
-    // Obtener el último día del mes corriente
     const lastDay = new Date(y, m + 1, 0);
     const temp = new Date(lastDay);
-    // Retroceder si cae sábado (6) o domingo (0)
     while (temp.getDay() === 0 || temp.getDay() === 6) {
       temp.setDate(temp.getDate() - 1);
     }
@@ -53,16 +50,31 @@ export default function App() {
 
   const isLastBusinessDayActive = isLastBusinessDayOfMonth() || simulateLastBusinessDay;
 
-  // --- INITIALIZE APPLICATION & PERSISTENCE (FIREBASE) ---
+  // --- FIX: Timeout de seguridad para transiciones colgadas ---
+  useEffect(() => {
+    if (!transitionLoading) return;
+    const timer = setTimeout(() => {
+      console.warn('[App] Forzando cierre de transición colgada');
+      setTransitionLoading(false);
+    }, 3000);
+    return () => clearTimeout(timer);
+  }, [transitionLoading]);
+
+  // --- INITIALIZE APPLICATION ---
   useEffect(() => {
     let unsubscribe: (() => void) | null = null;
 
-    initializeDB().then(({ initialState, subscribe }) => {
-      setDbState(initialState);
-      unsubscribe = subscribe((newState) => {
-        setDbState(newState);
+    initializeDB()
+      .then(({ initialState, subscribe }) => {
+        setDbState(initialState);
+        unsubscribe = subscribe((newState) => {
+          setDbState(newState);
+        });
+      })
+      .catch((err) => {
+        console.error('[App] Error inicializando DB:', err);
+        setInitError(err.message || 'Error al conectar con la base de datos');
       });
-    });
 
     // Cargar preferencias de usuario de localStorage
     const savedUser = localStorage.getItem('sabatto_current_user');
@@ -71,6 +83,7 @@ export default function App() {
         setCurrentUser(JSON.parse(savedUser));
       } catch (e) {
         console.error('Error parsed saved session', e);
+        localStorage.removeItem('sabatto_current_user');
       }
     }
 
@@ -102,8 +115,6 @@ export default function App() {
     localStorage.setItem('sabatto_product_sort_order', productSortOrder);
   }, [productSortOrder]);
 
-
-  // Guardar preferencias en localStorage
   useEffect(() => {
     localStorage.setItem('sabatto_preferred_lang', lang);
   }, [lang]);
@@ -121,15 +132,13 @@ export default function App() {
     localStorage.setItem('sabatto_sound_muted', String(soundMuted));
   }, [soundMuted]);
 
-  // --- EVALUACIÓN DE ALERTAS EN TIEMPO REAL ---
-
+  // --- ALERTAS EN TIEMPO REAL ---
   const evaluateAlertsAndAlarms = (state: FullDBState) => {
     const alertsList: { id: string; text: string; type: 'critical' | 'new_order' | 'info' | 'expiring' }[] = [];
     const today = new Date();
     const thirtyDaysLater = new Date();
     thirtyDaysLater.setDate(today.getDate() + 30);
 
-    // 1. Alertas de Stock Crítico Bajo
     state.products.forEach(p => {
       const totalStock = p.batches.reduce((acc, c) => acc + c.quantity, 0);
       if (totalStock < p.minStock) {
@@ -142,7 +151,6 @@ export default function App() {
         });
       }
 
-      // 2. Alertas de Próximos a Vencer
       p.batches.forEach(b => {
         if (b.quantity > 0) {
           const exp = new Date(b.expirationDate);
@@ -160,7 +168,6 @@ export default function App() {
       });
     });
 
-    // 3. Alertas de Pedidos Pendientes Nuevos (Para técnicos/farmacéuticos)
     const pendingOrdersCount = state.orders.filter(o => o.status === 'Pendiente').length;
     if (pendingOrdersCount > 0) {
       alertsList.push({
@@ -172,9 +179,7 @@ export default function App() {
       });
     }
 
-    // 4. ALERTA MENSUAL DE DESCARTE (AUTOMÁTICA FIN DE MES)
     if (isLastBusinessDayActive) {
-      // Buscar fármacos que vencen este mes o ya están vencidos
       const today = new Date();
       const thisMonth = today.getMonth();
       const thisYear = today.getFullYear();
@@ -205,14 +210,13 @@ export default function App() {
     setActiveAlerts(alertsList);
   };
 
-  // Escuchar cambios en dbState para recalcular alertas
   useEffect(() => {
     if (dbState) {
       evaluateAlertsAndAlarms(dbState);
     }
   }, [dbState, lang, simulateLastBusinessDay]);
 
-  // --- CONTROLES DE TRANSICIONES ---
+  // --- TRANSICIONES ---
   const triggerTransition = (text: string, callback: () => void) => {
     setTransitionText(text);
     setTransitionLoading(true);
@@ -222,7 +226,7 @@ export default function App() {
     }, 750);
   };
 
-  // --- HANDLERS CONTROLES USUARIOS ---
+  // --- HANDLERS ---
   const handleLogin = (user: User) => {
     triggerTransition(lang === 'es' ? 'Validando huella informática de acceso...' : 'Validating professional credentials...', () => {
       setCurrentUser(user);
@@ -247,16 +251,13 @@ export default function App() {
     });
   };
 
-  // --- OPERATIONS ON DB/STATE ---
-
-  // Enfermero envía pedido
+  // --- OPERATIONS ---
   const handleSubmitOrder = (order: Order) => {
     if (!dbState) return;
 
     const updatedOrders = [order, ...dbState.orders];
     const updatedState = { ...dbState, orders: updatedOrders };
 
-    // Agregar bitácora de auditoría
     const newAudit: AuditLog = {
       id: `aud_${Date.now()}`,
       timestamp: new Date().toISOString(),
@@ -270,19 +271,14 @@ export default function App() {
 
     setDbState(updatedState);
     saveDBState(updatedState);
-
-    // Reproducir pitido de alarma nuevo pedido para el depósito
     playBeep('alert');
   };
 
-  // Técnico prepara pedido (Edita cantidades y realiza FEFO)
   const handlePrepareOrder = (orderId: string, itemQuantities: Record<string, number>, assignedBatchesMap: Record<string, any>) => {
     if (!dbState) return;
 
-    // Actualizar pedido
     const updatedOrders = dbState.orders.map(ord => {
       if (ord.id === orderId) {
-        // Mapear cantidades aprobadas y lotes FEFO
         const updatedItems = ord.items.map(itm => {
           const qty = itemQuantities[itm.productId] !== undefined ? itemQuantities[itm.productId] : itm.requestedQuantity;
           return {
@@ -305,16 +301,14 @@ export default function App() {
       return ord;
     });
 
-    // Descontar del stock real
     const updatedProducts = dbState.products.map(prod => {
       const editQty = itemQuantities[prod.id];
-      if (editQty === undefined) return prod; // No estaba en el pedido
+      if (editQty === undefined) return prod;
 
       const assignedBatches = assignedBatchesMap[prod.id] || [];
       const updatedBatches = prod.batches.map(batch => {
         const matchAssigned = assignedBatches.find((ab: any) => ab.batchId === batch.id);
         if (matchAssigned) {
-          // Descontar la cantidad
           return {
             ...batch,
             quantity: Math.max(0, batch.quantity - matchAssigned.suggestedQty)
@@ -329,7 +323,6 @@ export default function App() {
       };
     });
 
-    // Auditoría
     const currentOrder = dbState.orders.find(o => o.id === orderId);
     const newAudit: AuditLog = {
       id: `aud_${Date.now()}`,
@@ -352,7 +345,6 @@ export default function App() {
     saveDBState(updatedState);
   };
 
-  // Entrega final de pedido
   const handleDeliverOrder = (orderId: string) => {
     if (!dbState) return;
 
@@ -392,46 +384,42 @@ export default function App() {
     saveDBState(updatedState);
   };
 
-// REEMPLAZAR handleUpdateUsers
-const handleUpdateUsers = async (updatedUsers: User[]) => {
-  if (!dbState) return;
-  const updatedState = { ...dbState, users: updatedUsers };
-  try {
-    await saveDBState(updatedState);
-    setDbState(updatedState);
-  } catch (error) {
-    console.error('Error guardando usuarios:', error);
-    alert('Error al guardar cambios de usuarios. Revisa la consola.');
-  }
-};
+  const handleUpdateUsers = async (updatedUsers: User[]) => {
+    if (!dbState) return;
+    const updatedState = { ...dbState, users: updatedUsers };
+    try {
+      await saveDBState(updatedState);
+      setDbState(updatedState);
+    } catch (error) {
+      console.error('Error guardando usuarios:', error);
+      alert('Error al guardar cambios de usuarios. Revisa la consola.');
+    }
+  };
 
-// REEMPLAZAR handleUpdateProducts  
-const handleUpdateProducts = async (updatedProducts: Product[]) => {
-  if (!dbState) return;
-  const updatedState = { ...dbState, products: updatedProducts };
-  try {
-    await saveDBState(updatedState);
-    setDbState(updatedState);
-  } catch (error) {
-    console.error('Error guardando productos:', error);
-    alert('Error al guardar productos. Revisa la consola.');
-  }
-};
+  const handleUpdateProducts = async (updatedProducts: Product[]) => {
+    if (!dbState) return;
+    const updatedState = { ...dbState, products: updatedProducts };
+    try {
+      await saveDBState(updatedState);
+      setDbState(updatedState);
+    } catch (error) {
+      console.error('Error guardando productos:', error);
+      alert('Error al guardar productos. Revisa la consola.');
+    }
+  };
 
-// REEMPLAZAR handleUpdateServiceConfigs
-const handleUpdateServiceConfigs = async (updatedConfigs: ServiceConfiguration[]) => {
-  if (!dbState) return;
-  const updatedState = { ...dbState, serviceConfigs: updatedConfigs };
-  try {
-    await saveDBState(updatedState);
-    setDbState(updatedState);
-  } catch (error) {
-    console.error('Error guardando configs:', error);
-    alert('Error al guardar configuraciones. Revisa la consola.');
-  }
-};
+  const handleUpdateServiceConfigs = async (updatedConfigs: ServiceConfiguration[]) => {
+    if (!dbState) return;
+    const updatedState = { ...dbState, serviceConfigs: updatedConfigs };
+    try {
+      await saveDBState(updatedState);
+      setDbState(updatedState);
+    } catch (error) {
+      console.error('Error guardando configs:', error);
+      alert('Error al guardar configuraciones. Revisa la consola.');
+    }
+  };
 
-  // Farmacéutico añade auditLog manual
   const handleAppendAudit = (log: AuditLog) => {
     setDbState(prev => {
       if (!prev) return prev;
@@ -441,14 +429,13 @@ const handleUpdateServiceConfigs = async (updatedConfigs: ServiceConfiguration[]
     });
   };
 
-  // Farmacéutico limpia base de datos para iniciar de forma limpia e impecable en producción real
   const handleResetProductionMode = () => {
     setDbState(prev => {
       if (!prev) return prev;
 
       const resetProducts = prev.products.map(p => ({
         ...p,
-        batches: [] // Despejar de raíz todos los lotes experimentales o simulados
+        batches: []
       }));
 
       const newAudit: AuditLog = {
@@ -464,8 +451,8 @@ const handleUpdateServiceConfigs = async (updatedConfigs: ServiceConfiguration[]
       const updatedState = {
         ...prev,
         products: resetProducts,
-        orders: [], // Limpiar pedidos históricos simulados
-        auditLogs: [newAudit] // Dejar únicamente la bitácora de inauguración limpia
+        orders: [],
+        auditLogs: [newAudit]
       };
 
       saveDBState(updatedState);
@@ -479,11 +466,10 @@ const handleUpdateServiceConfigs = async (updatedConfigs: ServiceConfiguration[]
     setActiveAlerts(prev => prev.filter(a => a.id !== id));
   };
 
-  // --- ORDENAMIENTO DE INSUMOS FEFO SEGÚN SELECCIÓN DE USUARIO ---
+  // --- ORDENAMIENTO FEFO ---
   const sortedProducts = useMemo(() => {
     if (!dbState) return [];
 
-    // Hacer una copia del catálogo de productos para no mutar el estado directamente
     const productsCopy = [...dbState.products];
 
     return productsCopy.sort((a, b) => {
@@ -509,7 +495,7 @@ const handleUpdateServiceConfigs = async (updatedConfigs: ServiceConfiguration[]
     });
   }, [dbState?.products, productSortOrder]);
 
-  // --- CONTROL VISTAS PRINCIPALES POR ROL ---
+  // --- VISTAS POR ROL ---
   const renderRoleView = () => {
     if (!currentUser || !dbState) return null;
 
@@ -547,8 +533,6 @@ const handleUpdateServiceConfigs = async (updatedConfigs: ServiceConfiguration[]
       case Role.FARMACEUTICO:
         return (
           <div className="space-y-6">
-
-            {/* El farmacéutico como super-usuario tiene acceso inmediato a probar comportamientos de los otros roles */}
             <div className="bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-4 rounded-2xl flex items-start gap-3">
               <span className="p-1 px-1.5 bg-orange-100 dark:bg-orange-950 rounded font-bold font-mono text-[10px] text-orange-700 dark:text-orange-300 uppercase shrink-0">VISTA DIRECTA</span>
               <p className="text-xs text-slate-700 dark:text-slate-300 font-sans tracking-tight leading-relaxed">
@@ -595,6 +579,23 @@ const handleUpdateServiceConfigs = async (updatedConfigs: ServiceConfiguration[]
     }
   };
 
+  // --- FIX: Pantalla de error si falla la inicialización ---
+  if (initError) {
+    return (
+      <div className="min-h-screen flex flex-col justify-center items-center font-sans bg-slate-950 text-white p-8">
+        <AlertCircle className="size-12 text-red-500 mb-4" />
+        <h1 className="text-xl font-bold text-red-400 mb-2">Error de Conexión</h1>
+        <p className="text-sm text-slate-400 text-center max-w-md mb-6">{initError}</p>
+        <button 
+          onClick={() => window.location.reload()}
+          className="px-4 py-2 bg-orange-600 hover:bg-orange-700 text-white rounded-xl text-sm font-semibold transition-colors"
+        >
+          Reintentar
+        </button>
+      </div>
+    );
+  }
+
   if (!dbState) {
     return (
       <div className="min-h-screen flex flex-col justify-center items-center font-sans bg-[var(--app-bg)]">
@@ -607,9 +608,9 @@ const handleUpdateServiceConfigs = async (updatedConfigs: ServiceConfiguration[]
   return (
     <div className="min-h-screen bg-[var(--app-bg)] transition-colors duration-300 text-slate-800 dark:text-slate-200">
 
-      {/* Pantalla suave de transiciones de rol */}
+      {/* Transición con z-index de seguridad */}
       {transitionLoading && (
-        <div id="transition_screen" className="fixed inset-0 bg-slate-950/80 backdrop-blur-md flex flex-col items-center justify-center z-50 transition-opacity duration-300">
+        <div id="transition_screen" className="fixed inset-0 bg-slate-950/80 backdrop-blur-md flex flex-col items-center justify-center z-[9999] transition-opacity duration-300">
           <Activity className="size-12 text-orange-500 animate-pulse" />
           <p className="text-sm font-semibold text-zinc-200 mt-4 font-sans tracking-tight animate-bounce">{transitionText}</p>
         </div>
@@ -640,7 +641,7 @@ const handleUpdateServiceConfigs = async (updatedConfigs: ServiceConfiguration[]
 
           <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pb-16">
 
-            {/* Banner de Sincronización Local & Criterio de Ordenamiento de Insumos */}
+            {/* Banner de Sincronización */}
             <div className="mb-6 flex flex-col md:flex-row justify-between items-stretch md:items-center p-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl shadow-xs gap-4 text-[11px] font-mono text-slate-400">
               <div className="flex flex-wrap items-center gap-3">
                 <div className="flex items-center gap-1.5 font-bold">
@@ -653,7 +654,6 @@ const handleUpdateServiceConfigs = async (updatedConfigs: ServiceConfiguration[]
                 </div>
               </div>
 
-              {/* Selector de Ordenamiento Global */}
               <div className="flex items-center gap-2 self-start md:self-auto bg-slate-50 dark:bg-slate-950 p-1.5 px-3 rounded-2xl border border-slate-150 dark:border-slate-850">
                 <span className="text-[10px] font-bold text-slate-500 dark:text-slate-400 font-sans">
                   {lang === 'es' ? 'Orden Visualización:' : 'Display Ordering:'}
