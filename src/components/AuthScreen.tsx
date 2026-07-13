@@ -8,7 +8,7 @@ import { translations } from '../translations';
 import { User, Role } from '../types';
 import { verifyPassword } from '../lib/auth';
 import farmaciaLogo from '../assets/images/farmacia_logo_1780424589468.png';
-import { KeyRound, ShieldCheck, Mail, Lock, Stethoscope } from 'lucide-react';
+import { KeyRound, ShieldCheck, Mail, Lock } from 'lucide-react';
 
 interface AuthScreenProps {
   users: User[];
@@ -31,7 +31,6 @@ export default function AuthScreen({ users, onLoginSuccess, lang }: AuthScreenPr
 
     const foundUser = users.find(u => u.email.toLowerCase() === email.trim().toLowerCase());
     if (foundUser) {
-      // Validación de contraseña con bcrypt
       const isValid = await verifyPassword(password.trim(), foundUser.password || '');
       if (isValid) {
         onLoginSuccess(foundUser);
@@ -101,6 +100,8 @@ export default function AuthScreen({ users, onLoginSuccess, lang }: AuthScreenPr
                 : 'Select a profile to prefill your email. Then enter your personal password.'}
             </p>
             <div className="grid grid-cols-1 gap-2">
+              
+              {/* Enfermero Guardia */}
               <button
                 id="demo_enfermero"
                 type="button"
@@ -114,6 +115,7 @@ export default function AuthScreen({ users, onLoginSuccess, lang }: AuthScreenPr
                 <span className="text-[10px] text-zinc-400 font-mono">enfermero@test.com</span>
               </button>
 
+              {/* Enfermero IRAB */}
               <button
                 id="demo_irab"
                 type="button"
@@ -127,6 +129,7 @@ export default function AuthScreen({ users, onLoginSuccess, lang }: AuthScreenPr
                 <span className="text-[10px] text-zinc-400 font-mono">irab@test.com</span>
               </button>
 
+              {/* Técnico Depósito */}
               <button
                 id="demo_tecnico"
                 type="button"
@@ -135,11 +138,40 @@ export default function AuthScreen({ users, onLoginSuccess, lang }: AuthScreenPr
               >
                 <div className="flex items-center gap-2">
                   <span className="size-2 bg-amber-500 rounded-full inline-block"></span>
-                  <span>{t.tecnico}</span>
+                  <span>{t.tecnico} <span className="font-mono text-zinc-400 font-normal">(Depósito)</span></span>
                 </div>
                 <span className="text-[10px] text-zinc-400 font-mono">tecnico@test.com</span>
               </button>
 
+              {/* NUEVO: Técnico Laboratorio */}
+              <button
+                id="demo_laboratorio"
+                type="button"
+                onClick={() => selectDemoUser('laboratorio@test.com')}
+                className="flex items-center justify-between text-left px-4 py-2.5 text-xs font-semibold rounded-xl bg-zinc-50 hover:bg-zinc-100 dark:bg-zinc-800/55 dark:hover:bg-zinc-800 border border-zinc-200/60 dark:border-zinc-700/60 text-zinc-700 dark:text-zinc-300 transition duration-150 cursor-pointer disabled:opacity-50"
+              >
+                <div className="flex items-center gap-2">
+                  <span className="size-2 bg-blue-500 rounded-full inline-block"></span>
+                  <span>Técnico <span className="font-mono text-zinc-400 font-normal">(Laboratorio)</span></span>
+                </div>
+                <span className="text-[10px] text-zinc-400 font-mono">laboratorio@test.com</span>
+              </button>
+
+              {/* NUEVO: Técnico Farmacia Dispensa */}
+              <button
+                id="demo_farmacia"
+                type="button"
+                onClick={() => selectDemoUser('farmacia@test.com')}
+                className="flex items-center justify-between text-left px-4 py-2.5 text-xs font-semibold rounded-xl bg-zinc-50 hover:bg-zinc-100 dark:bg-zinc-800/55 dark:hover:bg-zinc-800 border border-zinc-200/60 dark:border-zinc-700/60 text-zinc-700 dark:text-zinc-300 transition duration-150 cursor-pointer disabled:opacity-50"
+              >
+                <div className="flex items-center gap-2">
+                  <span className="size-2 bg-purple-500 rounded-full inline-block"></span>
+                  <span>Técnico <span className="font-mono text-zinc-400 font-normal">(Farmacia Dispensa)</span></span>
+                </div>
+                <span className="text-[10px] text-zinc-400 font-mono">farmacia@test.com</span>
+              </button>
+
+              {/* Farmacéutico Principal (Admin) */}
               <button
                 id="demo_caps_admin"
                 type="button"
@@ -153,19 +185,7 @@ export default function AuthScreen({ users, onLoginSuccess, lang }: AuthScreenPr
                 <span className="text-[10px] text-orange-600 dark:text-orange-400 font-mono">capsfarmaciasabatto@gmail.com</span>
               </button>
 
-              <button
-                id="demo_farmaceutico"
-                type="button"
-                onClick={() => selectDemoUser('farmaceutico@test.com')}
-                className="flex items-center justify-between text-left px-4 py-2.5 text-xs font-semibold rounded-xl bg-zinc-50 hover:bg-zinc-100 dark:bg-zinc-800/55 dark:hover:bg-zinc-800 border border-zinc-200/60 dark:border-zinc-700/60 text-zinc-700 dark:text-zinc-300 transition duration-150 cursor-pointer disabled:opacity-50"
-              >
-                <div className="flex items-center gap-2">
-                  <span className="size-2 bg-orange-500 rounded-full inline-block"></span>
-                  <span>{t.farmaceutico} <span className="font-mono text-zinc-400 font-normal">(Demo)</span></span>
-                </div>
-                <span className="text-[10px] text-zinc-400 font-mono">farmaceutico@test.com</span>
-              </button>
-
+              {/* Director */}
               <button
                 id="demo_director"
                 type="button"
@@ -178,6 +198,7 @@ export default function AuthScreen({ users, onLoginSuccess, lang }: AuthScreenPr
                 </div>
                 <span className="text-[10px] text-zinc-400 font-mono">director@test.com</span>
               </button>
+
             </div>
           </div>
 
