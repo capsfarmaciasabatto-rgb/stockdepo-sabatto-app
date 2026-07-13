@@ -4,17 +4,17 @@
  */
 
 export enum Role {
-  ENFERMERO = 'enfermero',
-  TECNICO = 'tecnico',
-  FARMACEUTICO = 'farmaceutico',
-  DIRECTOR = 'director',
+  ENFERMERO = 'ENFERMERO',
+  TECNICO = 'TECNICO',
+  FARMACEUTICO = 'FARMACEUTICO',
+  DIRECTOR = 'DIRECTOR',
 }
 
 export enum PredefinedService {
-  GUARDIA = 'Guardia',
-  LABORATORIO = 'Laboratorio',
+  GUARDIA = 'GUARDIA',
+  LABORATORIO = 'LABORATORIO',
   IRAB = 'IRAB',
-  FARMACIA = 'Farmacia dispensa',
+  FARMACIA = 'FARMACIA',
 }
 
 export interface User {
@@ -22,28 +22,28 @@ export interface User {
   email: string;
   name: string;
   role: Role;
-  service?: PredefinedService; // Solo para enfermeros, representa a qué servicio pertenecen
-  password?: string; // Contraseña de acceso opcional para el personal
+  service?: PredefinedService;
+  password?: string;
 }
 
 export interface StockBatch {
-  id: string; // ID único de lote
-  batchCode: string; // Código de lote (ej: L-2041)
-  expirationDate: string; // Formato YYYY-MM-DD
-  quantity: number; // Cantidad en este lote
+  id: string;
+  batchCode: string;
+  expirationDate: string;
+  quantity: number;
 }
 
 export interface Product {
   id: string;
   name: string;
-  presentation: string; // Presentación (ej: FA, Ampollas, Frasco 5ml)
-  minStock: number; // Stock crítico mínimo
-  category: PredefinedService | 'Compartido'; // Categoría predefinida
-  batches: StockBatch[]; // Lotes bajo FEFO
-  allowedServices: string[]; // Servicios autorizados a pedir (Guardia, Laboratorio, IRAB)
-  shelfLetter?: string; // Estantería (A-Z)
-  shelfLevel?: number; // Nivel de estante (1, 2, 3...)
-  productType?: 'Med' | 'PM'; // Tipo de producto: 'Med' (Medicamento) o 'PM' (Producto Médico / Insumo)
+  presentation: string;
+  minStock: number;
+  category: PredefinedService | 'Compartido';
+  batches: StockBatch[];
+  allowedServices: string[];
+  shelfLetter?: string;
+  shelfLevel?: number;
+  productType?: 'Med' | 'PM';
 }
 
 export type OrderStatus = 'Pendiente' | 'Preparado' | 'Entregado';
@@ -52,9 +52,8 @@ export interface OrderItem {
   productId: string;
   productName: string;
   presentation: string;
-  requestedQuantity: number; // Cantidad solicitada por enfermero
-  approvedQuantity?: number; // Cantidad aprobada/preparada por técnico/farmacéutico
-  // Detalles del lote asignado (FEFO) al preparar
+  requestedQuantity: number;
+  approvedQuantity?: number;
   assignedBatches?: {
     batchId: string;
     batchCode: string;
@@ -65,14 +64,14 @@ export interface OrderItem {
 
 export interface Order {
   id: string;
-  service: string; // Servicio que pide (Guardia, Laboratorio, IRAB)
+  service: string;
   requestedBy: {
     userId: string;
     userName: string;
     userEmail: string;
   };
-  requestDate: string; // YYYY-MM-DD THH:mm:ss
-  deliveryDate?: string; // YYYY-MM-DD THH:mm:ss
+  requestDate: string;
+  deliveryDate?: string;
   status: OrderStatus;
   type: 'Periodico' | 'Extraordinario';
   items: OrderItem[];
@@ -89,24 +88,20 @@ export interface Order {
 
 export interface AuditLog {
   id: string;
-  timestamp: string; // YYYY-MM-DD THH:mm:ss
+  timestamp: string;
   userId: string;
   userName: string;
   userRole: Role;
-  action: string; // 'CREATE_ORDER', 'PREPARE_ORDER', 'DELIVER_ORDER', 'MANUAL_STOCK_ADJUST', 'CATALOG_UPDATE', 'USER_UPDATE'
-  details: string; // Descripción human-friendly de lo que se cambió
+  action: string;
+  details: string;
 }
 
 export interface ServiceConfiguration {
   serviceName: PredefinedService;
-  orderDay: number; // 0 = Domingo, 1 = Lunes, ..., 6 = Sábado
-  orderDayName: string; // "Lunes", "Martes", etc.
-  allowDaily: boolean; // Si puede pedir diariamente (IRAB por defecto true)
+  orderDay: number;
+  orderDayName: string;
+  allowDaily: boolean;
 }
-
-// ============================================================
-// INTERFAZ DE ESTADO COMPLETO (para Firebase)
-// ============================================================
 
 export interface FullDBState {
   products: Product[];
