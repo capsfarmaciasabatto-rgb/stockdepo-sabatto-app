@@ -5,7 +5,7 @@
 
 import { useState, useEffect, useMemo } from 'react';
 import { initializeDB, saveDBState, FullDBState } from './lib/database';
-import { addOrder, updateOrder, updateProduct, appendAuditLog } from './lib/supabaseUtils';
+import { addOrder, updateOrder, updateOrderItems, updateProduct, appendAuditLog } from './lib/supabaseUtils';
 import { User, Order, Product, Role, AuditLog, ServiceConfiguration, OrderStatus } from './types';
 import AuthScreen from './components/AuthScreen';
 import Navigation from './components/Navigation';
@@ -343,6 +343,12 @@ export default function App() {
           userName: currentUser?.name || 'Técnico'
         }
       });
+
+      // Actualizar items del pedido en Supabase (approvedQuantity y assignedBatches)
+      const preparedOrder = updatedOrders.find(o => o.id === orderId);
+      if (preparedOrder) {
+        await updateOrderItems(orderId, preparedOrder.items);
+      }
 
       // Actualizar productos en Supabase (stock descontado con lotes)
       await saveDBState({ ...dbState, products: updatedProducts });
