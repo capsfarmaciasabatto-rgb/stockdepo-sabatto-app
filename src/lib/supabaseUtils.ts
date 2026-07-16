@@ -6,6 +6,7 @@
 import { supabase } from '../supabase';
 import type {
   Order,
+  OrderItem,
   Product,
   User,
   AuditLog,
