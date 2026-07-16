@@ -1357,9 +1357,8 @@ const handleCreateOrUpdateProduct = (e: React.FormEvent) => {
         shelfLetter: pShelfLetter || 'A',
         shelfLevel: Number(pShelfLevel) || 1,
         productType: pProductType || 'Med',
-        batches: [
-          { id: `b_init_${Date.now()}`, batchCode: 'L-NUEVO-01', expirationDate: '2027-12-31', quantity: 20 }
-        ],
+        batches: [],
+        
         allowedServices: pCategory === 'Compartido'
           ? [PredefinedService.GUARDIA, PredefinedService.LABORATORIO, PredefinedService.IRAB, PredefinedService.FARMACIA]
           : [pCategory as PredefinedService]
