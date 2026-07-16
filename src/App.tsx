@@ -5,6 +5,7 @@
 
 import { useState, useEffect, useMemo } from 'react';
 import { initializeDB, saveDBState, FullDBState } from './lib/database';
+import { addOrder, updateOrder, updateProduct, appendAuditLog } from './lib/supabaseUtils';
 import { User, Order, Product, Role, AuditLog, ServiceConfiguration, OrderStatus } from './types';
 import AuthScreen from './components/AuthScreen';
 import Navigation from './components/Navigation';
@@ -252,136 +253,174 @@ export default function App() {
   };
 
   // --- OPERATIONS ---
-  const handleSubmitOrder = (order: Order) => {
+  const handleSubmitOrder = async (order: Order) => {
     if (!dbState) return;
 
-    const updatedOrders = [order, ...dbState.orders];
-    const updatedState = { ...dbState, orders: updatedOrders };
+    try {
+      // Guardar pedido en Supabase usando addOrder
+      await addOrder(order);
 
-    const newAudit: AuditLog = {
-      id: `aud_${Date.now()}`,
-      timestamp: new Date().toISOString(),
-      userId: currentUser?.id || 'none',
-      userName: currentUser?.name || 'Sistema',
-      userRole: currentUser?.role || Role.ENFERMERO,
-      action: 'CREATE_ORDER',
-      details: `Generó nuevo pedido (${order.type === 'Extraordinario' ? 'Extraordinario' : 'Semanal'}) para sector ${order.service}.`
-    };
-    updatedState.auditLogs.unshift(newAudit);
+      // Guardar log de auditoría
+      await appendAuditLog({
+        id: `aud_${Date.now()}`,
+        timestamp: new Date().toISOString(),
+        userId: currentUser?.id || 'none',
+        userName: currentUser?.name || 'Sistema',
+        userRole: currentUser?.role || Role.ENFERMERO,
+        action: 'CREATE_ORDER',
+        details: `Generó nuevo pedido (${order.type === 'Extraordinario' ? 'Extraordinario' : 'Semanal'}) para sector ${order.service}.`
+      });
 
-    setDbState(updatedState);
-    saveDBState(updatedState);
-    playBeep('alert');
+      // Actualizar estado local
+      const updatedOrders = [order, ...dbState.orders];
+      const updatedState = { ...dbState, orders: updatedOrders };
+      setDbState(updatedState);
+
+      playBeep('alert');
+    } catch (error) {
+      console.error('Error guardando pedido:', error);
+      alert('Error al guardar el pedido. Revisa la consola.');
+    }
   };
 
-  const handlePrepareOrder = (orderId: string, itemQuantities: Record<string, number>, assignedBatchesMap: Record<string, any>) => {
+  const handlePrepareOrder = async (orderId: string, itemQuantities: Record<string, number>, assignedBatchesMap: Record<string, any>) => {
     if (!dbState) return;
 
-    const updatedOrders = dbState.orders.map(ord => {
-      if (ord.id === orderId) {
-        const updatedItems = ord.items.map(itm => {
-          const qty = itemQuantities[itm.productId] !== undefined ? itemQuantities[itm.productId] : itm.requestedQuantity;
+    try {
+      const updatedOrders = dbState.orders.map(ord => {
+        if (ord.id === orderId) {
+          const updatedItems = ord.items.map(itm => {
+            const qty = itemQuantities[itm.productId] !== undefined ? itemQuantities[itm.productId] : itm.requestedQuantity;
+            return {
+              ...itm,
+              approvedQuantity: qty,
+              assignedBatches: assignedBatchesMap[itm.productId] || []
+            };
+          });
+
           return {
-            ...itm,
-            approvedQuantity: qty,
-            assignedBatches: assignedBatchesMap[itm.productId] || []
+            ...ord,
+            status: 'Preparado' as OrderStatus,
+            items: updatedItems,
+            preparedBy: {
+              userId: currentUser?.id || 'sys',
+              userName: currentUser?.name || 'Técnico'
+            }
           };
+        }
+        return ord;
+      });
+
+      const updatedProducts = dbState.products.map(prod => {
+        const editQty = itemQuantities[prod.id];
+        if (editQty === undefined) return prod;
+
+        const assignedBatches = assignedBatchesMap[prod.id] || [];
+        const updatedBatches = prod.batches.map(batch => {
+          const matchAssigned = assignedBatches.find((ab: any) => ab.batchId === batch.id);
+          if (matchAssigned) {
+            return {
+              ...batch,
+              quantity: Math.max(0, batch.quantity - matchAssigned.suggestedQty)
+            };
+          }
+          return batch;
         });
 
         return {
-          ...ord,
-          status: 'Preparado' as OrderStatus,
-          items: updatedItems,
-          preparedBy: {
-            userId: currentUser?.id || 'sys',
-            userName: currentUser?.name || 'Técnico'
-          }
+          ...prod,
+          batches: updatedBatches
         };
-      }
-      return ord;
-    });
-
-    const updatedProducts = dbState.products.map(prod => {
-      const editQty = itemQuantities[prod.id];
-      if (editQty === undefined) return prod;
-
-      const assignedBatches = assignedBatchesMap[prod.id] || [];
-      const updatedBatches = prod.batches.map(batch => {
-        const matchAssigned = assignedBatches.find((ab: any) => ab.batchId === batch.id);
-        if (matchAssigned) {
-          return {
-            ...batch,
-            quantity: Math.max(0, batch.quantity - matchAssigned.suggestedQty)
-          };
-        }
-        return batch;
       });
 
-      return {
-        ...prod,
-        batches: updatedBatches
+      const currentOrder = dbState.orders.find(o => o.id === orderId);
+
+      // Actualizar pedido en Supabase
+      await updateOrder(orderId, {
+        status: 'Preparado',
+        preparedBy: {
+          userId: currentUser?.id || 'sys',
+          userName: currentUser?.name || 'Técnico'
+        }
+      });
+
+      // Actualizar productos en Supabase (stock descontado con lotes)
+      await saveDBState({ ...dbState, products: updatedProducts });
+
+      // Guardar log de auditoría
+      await appendAuditLog({
+        id: `aud_${Date.now()}`,
+        timestamp: new Date().toISOString(),
+        userId: currentUser?.id || 'sys',
+        userName: currentUser?.name || 'Técnico',
+        userRole: currentUser?.role || Role.TECNICO,
+        action: 'PREPARE_ORDER',
+        details: `Preparó despacho e implementó FEFO para pedido ID: ${orderId} (${currentOrder?.service})`
+      });
+
+      const updatedState = {
+        ...dbState,
+        orders: updatedOrders,
+        products: updatedProducts
       };
-    });
-
-    const currentOrder = dbState.orders.find(o => o.id === orderId);
-    const newAudit: AuditLog = {
-      id: `aud_${Date.now()}`,
-      timestamp: new Date().toISOString(),
-      userId: currentUser?.id || 'sys',
-      userName: currentUser?.name || 'Técnico',
-      userRole: currentUser?.role || Role.TECNICO,
-      action: 'PREPARE_ORDER',
-      details: `Preparó despacho e implementó FEFO para pedido ID: ${orderId} (${currentOrder?.service})`
-    };
-
-    const updatedState = {
-      ...dbState,
-      orders: updatedOrders,
-      products: updatedProducts,
-      auditLogs: [newAudit, ...dbState.auditLogs]
-    };
-
-    setDbState(updatedState);
-    saveDBState(updatedState);
+      setDbState(updatedState);
+    } catch (error) {
+      console.error('Error preparando pedido:', error);
+      alert('Error al preparar el pedido. Revisa la consola.');
+    }
   };
 
-  const handleDeliverOrder = (orderId: string) => {
+  const handleDeliverOrder = async (orderId: string) => {
     if (!dbState) return;
 
-    const updatedOrders = dbState.orders.map(ord => {
-      if (ord.id === orderId) {
-        return {
-          ...ord,
-          status: 'Entregado' as OrderStatus,
-          deliveryDate: new Date().toISOString(),
-          deliveredBy: {
-            userId: currentUser?.id || 'sys',
-            userName: currentUser?.name || 'Personal Depósito'
-          }
-        };
-      }
-      return ord;
-    });
+    try {
+      const updatedOrders = dbState.orders.map(ord => {
+        if (ord.id === orderId) {
+          return {
+            ...ord,
+            status: 'Entregado' as OrderStatus,
+            deliveryDate: new Date().toISOString(),
+            deliveredBy: {
+              userId: currentUser?.id || 'sys',
+              userName: currentUser?.name || 'Personal Depósito'
+            }
+          };
+        }
+        return ord;
+      });
 
-    const currentOrder = dbState.orders.find(o => o.id === orderId);
-    const newAudit: AuditLog = {
-      id: `aud_${Date.now()}`,
-      timestamp: new Date().toISOString(),
-      userId: currentUser?.id || 'sys',
-      userName: currentUser?.name || 'Personal Depósito',
-      userRole: currentUser?.role || Role.TECNICO,
-      action: 'DELIVER_ORDER',
-      details: `Marcó pedido ${orderId} con destino a ${currentOrder?.service} como ENTREGADO.`
-    };
+      const currentOrder = dbState.orders.find(o => o.id === orderId);
 
-    const updatedState = {
-      ...dbState,
-      orders: updatedOrders,
-      auditLogs: [newAudit, ...dbState.auditLogs]
-    };
+      // Actualizar pedido en Supabase
+      await updateOrder(orderId, {
+        status: 'Entregado',
+        deliveryDate: new Date().toISOString(),
+        deliveredBy: {
+          userId: currentUser?.id || 'sys',
+          userName: currentUser?.name || 'Personal Depósito'
+        }
+      });
 
-    setDbState(updatedState);
-    saveDBState(updatedState);
+      // Guardar log de auditoría
+      await appendAuditLog({
+        id: `aud_${Date.now()}`,
+        timestamp: new Date().toISOString(),
+        userId: currentUser?.id || 'sys',
+        userName: currentUser?.name || 'Personal Depósito',
+        userRole: currentUser?.role || Role.TECNICO,
+        action: 'DELIVER_ORDER',
+        details: `Marcó pedido ${orderId} con destino a ${currentOrder?.service} como ENTREGADO.`
+      });
+
+      const updatedState = {
+        ...dbState,
+        orders: updatedOrders
+      };
+      setDbState(updatedState);
+    } catch (error) {
+      console.error('Error entregando pedido:', error);
+      alert('Error al marcar el pedido como entregado. Revisa la consola.');
+    }
   };
 
   const handleUpdateUsers = async (updatedUsers: User[]) => {
