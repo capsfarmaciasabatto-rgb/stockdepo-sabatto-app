@@ -256,6 +256,39 @@ export async function setOrders(orders: Order[]): Promise<void> {
 /**
  * Reemplaza el catálogo completo de productos.
  */
+
+/**
+ * Actualiza los ítems de un pedido (approved_quantity y assigned_batches).
+ */
+export async function updateOrderItems(orderId: string, items: OrderItem[]): Promise<void> {
+  // Primero eliminar los items existentes del pedido
+  const { error: deleteError } = await supabase
+    .from('order_items')
+    .delete()
+    .eq('order_id', orderId);
+
+  if (deleteError) throw deleteError;
+
+  // Insertar los nuevos items actualizados
+  if (items && items.length > 0) {
+    const itemsToInsert = items.map(item => ({
+      order_id: orderId,
+      product_id: item.productId,
+      product_name: item.productName,
+      presentation: item.presentation,
+      requested_quantity: item.requestedQuantity,
+      approved_quantity: item.approvedQuantity,
+      assigned_batches: item.assignedBatches || []
+    }));
+
+    const { error: itemsError } = await supabase
+      .from('order_items')
+      .insert(itemsToInsert);
+
+    if (itemsError) throw itemsError;
+  }
+}
+
 export async function setProducts(products: Product[]): Promise<void> {
   const productsToSave = products.map(p => ({
     id: p.id,
