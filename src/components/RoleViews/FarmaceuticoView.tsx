@@ -555,226 +555,11 @@ export default function FarmaceuticoView({
     return new Date().toISOString().split('T')[0];
   });
 
-  // --- LOGICA DE IMPORTACIÓN LOGÍSTICA DESDE CSV ---
-  const [csvItems, setCsvItems] = useState<{
-    name: string;
-    presentation: string;
-    minStock: number;
-    category: PredefinedService | 'Compartido';
-    batchCode?: string;
-    expirationDate?: string;
-    quantity?: number;
-    shelfLetter?: string;
-    shelfLevel?: number;
-  }[]>([]);
-  const [csvFileName, setCsvFileName] = useState('');
-  const [csvError, setCsvError] = useState('');
-  const [isDragOver, setIsDragOver] = useState(false);
+  
+      
+  
 
-  const parseCSVText = (text: string) => {
-    try {
-      setCsvError('');
-      const lines = text.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
-      if (lines.length === 0) {
-        setCsvError(lang === 'es' ? 'El archivo está vacío o sin datos legibles.' : 'The file is empty or lacks readable rows.');
-        return;
-      }
-
-      // Detetección del delimitador: tabulador, coma, o punto y coma
-      const firstLine = lines[0];
-      let separator = ';';
-      if (firstLine.includes('\t')) {
-        separator = '\t';
-      } else if (firstLine.includes(';') && firstLine.includes(',')) {
-        separator = ';'; // preferir punto y coma si ambos existen
-      } else if (firstLine.includes(',')) {
-        separator = ',';
-      } else if (firstLine.includes(';')) {
-        separator = ';';
-      }
-
-      // Detectar si la primera fila es cabecera
-      let hasHeader = false;
-      const firstLineLower = firstLine.toLowerCase();
-      if (
-        firstLineLower.includes('nombre') || 
-        firstLineLower.includes('name') || 
-        firstLineLower.includes('insumo') || 
-        firstLineLower.includes('present') || 
-        firstLineLower.includes('stock') || 
-        firstLineLower.includes('categor') ||
-        firstLineLower.includes('lote') ||
-        firstLineLower.includes('venc') ||
-        firstLineLower.includes('cant') ||
-        firstLineLower.includes('estanter') ||
-        firstLineLower.includes('estante')
-      ) {
-        hasHeader = true;
-      }
-
-      const rowsToParse = hasHeader ? lines.slice(1) : lines;
-      const parsed = rowsToParse.map((line, index) => {
-        let parts: string[] = [];
-        if (separator === ',') {
-          // regex básico para separar por comas respetando comillas
-          const matches = line.match(/(".*?"|[^",\s]+)(?=\s*,|\s*$)/g) || line.split(',');
-          parts = matches.map(m => m.replace(/^"|"$/g, '').trim());
-        } else {
-          parts = line.split(separator).map(p => p.trim());
-        }
-
-        if (parts.length < 2) {
-          return null; // Fila vacía o incompleta
-        }
-
-        const name = parts[0] ? parts[0].replace(/^"|"$/g, '').trim() : '';
-        const presentation = parts[1] ? parts[1].replace(/^"|"$/g, '').trim() : '';
-        if (!name || !presentation) return null;
-
-        // Stock mínimo base
-        let minStock = 10;
-        if (parts[2]) {
-          const num = parseInt(parts[2], 10);
-          if (!isNaN(num)) minStock = num;
-        }
-
-        // Categoría / Sector
-        let category: PredefinedService | 'Compartido' = 'Compartido';
-        if (parts[3]) {
-          const catLower = parts[3].toLowerCase();
-          if (catLower.includes('guardia')) {
-            category = PredefinedService.GUARDIA;
-          } else if (catLower.includes('lab') || catLower.includes('laboratorio')) {
-            category = PredefinedService.LABORATORIO;
-          } else if (catLower.includes('irab')) {
-            category = PredefinedService.IRAB;
-          } else if (catLower.includes('compartido') || catLower.includes('todos') || catLower.includes('shared')) {
-            category = 'Compartido';
-          }
-        }
-
-        // Lote inicial, vencimiento y cantidad opcional
-        const batchCode = parts[4] ? parts[4].replace(/^"|"$/g, '').trim() : undefined;
-        const expirationDate = parts[5] ? parts[5].replace(/^"|"$/g, '').trim() : undefined;
-        let quantity: number | undefined = undefined;
-        if (parts[6]) {
-          const numQty = parseInt(parts[6], 10);
-          if (!isNaN(numQty)) quantity = numQty;
-        }
-
-        // Estantería y nivel opcional
-        const shelfLetter = parts[7] ? parts[7].replace(/^"|"$/g, '').trim().toUpperCase() : undefined;
-        let shelfLevel: number | undefined = undefined;
-        if (parts[8]) {
-          const numLevel = parseInt(parts[8], 10);
-          if (!isNaN(numLevel)) shelfLevel = numLevel;
-        }
-
-        return {
-          name,
-          presentation,
-          minStock,
-          category,
-          batchCode,
-          expirationDate,
-          quantity,
-          shelfLetter,
-          shelfLevel
-        };
-      }).filter((item): item is NonNullable<typeof item> => item !== null);
-
-      if (parsed.length === 0) {
-        setCsvError(lang === 'es' ? 'No se detectaron filas válidas de insumos en el archivo.' : 'No valid product rows parsed from file.');
-        return;
-      }
-
-      setCsvItems(parsed);
-    } catch (err: any) {
-      setCsvError(lang === 'es' ? `Error procesando CSV: ${err.message || err}` : `CSV parse error: ${err.message || err}`);
-    }
-  };
-
-  const handleImportCSVConfirm = () => {
-    if (csvItems.length === 0) return;
-
-    let updatedList = [...products];
-    let importedNew = 0;
-    let updatedExisting = 0;
-
-    csvItems.forEach(item => {
-      // Comparación ignorando mayúsculas y espacios extras
-      const existingProduct = updatedList.find(
-        p => p.name.trim().toLowerCase() === item.name.toLowerCase() &&
-             p.presentation.trim().toLowerCase() === item.presentation.toLowerCase()
-      );
-
-      const batchCodeVal = item.batchCode || 'L-IMPORT-01';
-      const expDateVal = item.expirationDate || '2027-12-31';
-      const qtyVal = item.quantity !== undefined ? item.quantity : 25;
-
-      const newBatch: StockBatch = {
-        id: `b_imptr_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-        batchCode: batchCodeVal,
-        expirationDate: expDateVal,
-        quantity: qtyVal
-      };
-
-      if (existingProduct) {
-        // Combinar con insumo ya en catálogo (sumar stock o añadir lote)
-        const hasSameBatch = existingProduct.batches.some(b => b.batchCode === batchCodeVal);
-        const nextBatches = hasSameBatch
-          ? existingProduct.batches.map(b => b.batchCode === batchCodeVal ? { ...b, quantity: b.quantity + qtyVal } : b)
-          : [...existingProduct.batches, newBatch];
-
-        existingProduct.batches = nextBatches;
-        if (item.minStock) {
-          existingProduct.minStock = item.minStock;
-        }
-        if (item.shelfLetter) {
-          existingProduct.shelfLetter = item.shelfLetter;
-        }
-        if (item.shelfLevel !== undefined) {
-          existingProduct.shelfLevel = item.shelfLevel;
-        }
-        updatedExisting++;
-      } else {
-        // Insertar nuevo medicamento completo
-        const newProduct: Product = {
-          id: `p_csv_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-          name: item.name,
-          presentation: item.presentation,
-          minStock: item.minStock,
-          category: item.category,
-          shelfLetter: item.shelfLetter || 'A',
-          shelfLevel: item.shelfLevel !== undefined ? item.shelfLevel : 1,
-          batches: [newBatch],
-          productType: 'Med',
-          allowedServices: item.category === 'Compartido'
-            ? [PredefinedService.GUARDIA, PredefinedService.LABORATORIO, PredefinedService.IRAB, PredefinedService.FARMACIA]
-            : [item.category]
-        };
-        updatedList.unshift(newProduct);
-        importedNew++;
-      }
-    });
-
-    onUpdateProducts(updatedList);
-
-    onAppendAudit({
-      id: `aud_${Date.now()}`,
-      timestamp: new Date().toISOString(),
-      userId: currentUser.id,
-      userName: currentUser.name,
-      userRole: currentUser.role,
-      action: 'CATALOG_UPDATE',
-      details: `Importación masiva: se registraron ${importedNew} insumos nuevos y se recargó stock de ${updatedExisting} pre-existentes.`
-    });
-
-    setCsvItems([]);
-    setCsvFileName('');
-    setCsvError('');
-    playBeep('success');
-  };
+  
 
   const handlePrintPDFReport = () => {
     const printWindow = window.open('', '_blank');
@@ -1130,6 +915,7 @@ export default function FarmaceuticoView({
   const [pShelfLevel, setPShelfLevel] = useState(1);
   const [pProductType, setPProductType] = useState<'Med' | 'PM'>('Med');
   const [catalogTypeFilter, setCatalogTypeFilter] = useState<'All' | 'Med' | 'PM'>('All');
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   // Nuevos estados de búsqueda para mejorar localizabilidad de insumos creados
   const [catalogSearchTerm, setCatalogSearchTerm] = useState('');
@@ -1499,78 +1285,111 @@ export default function FarmaceuticoView({
 const handleCreateOrUpdateProduct = (e: React.FormEvent) => {
   e.preventDefault();
   if (!pName.trim() || !pPresentation.trim()) return;
+  if (isSubmitting) return;
+  setIsSubmitting(true);
 
-  let updatedList = [...products];
+  // Normalizar textos para comparación (quitar tildes, espacios extras, lowercase)
+  const normalizeText = (text: string) =>
+    text.trim().toLowerCase()
+      .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+      .replace(/\s+/g, ' ');
 
-  if (editingProduct) {
-    updatedList = updatedList.map(p => {
-      if (p.id === editingProduct.id) {
-        return {
-          ...p,
-          name: pName.trim(),
-          presentation: pPresentation.trim(),
-          minStock: Number(pMinStock) || 10,
-          category: pCategory || 'Compartido',
-          shelfLetter: pShelfLetter || 'A',
-          shelfLevel: Number(pShelfLevel) || 1,
-          productType: pProductType || 'Med',
-          // Mantener lotes y servicios anteriores
-        };
+  try {
+    let updatedList = [...products];
+
+    if (editingProduct) {
+      updatedList = updatedList.map(p => {
+        if (p.id === editingProduct.id) {
+          return {
+            ...p,
+            name: pName.trim(),
+            presentation: pPresentation.trim(),
+            minStock: Number(pMinStock) || 10,
+            category: pCategory || 'Compartido',
+            shelfLetter: pShelfLetter || 'A',
+            shelfLevel: Number(pShelfLevel) || 1,
+            productType: pProductType || 'Med',
+          };
+        }
+        return p;
+      });
+
+      onAppendAudit({
+        id: `aud_${Date.now()}`,
+        timestamp: new Date().toISOString(),
+        userId: currentUser.id,
+        userName: currentUser.name,
+        userRole: currentUser.role,
+        action: 'CATALOG_UPDATE',
+        details: `Actualizó insumo catálogo: ${pName} (${pPresentation})`
+      });
+
+    } else {
+      // --- VALIDACIÓN ANTI-DUPLICADO ---
+      const normalizedName = normalizeText(pName);
+      const normalizedPres = normalizeText(pPresentation);
+
+      const duplicate = products.find(p =>
+        normalizeText(p.name) === normalizedName &&
+        normalizeText(p.presentation) === normalizedPres
+      );
+
+      if (duplicate) {
+        setDialog({
+          isOpen: true,
+          title: lang === 'es' ? 'Insumo duplicado' : 'Duplicate Product',
+          message: lang === 'es'
+            ? `Ya existe un insumo con el nombre "${duplicate.name}" y presentación "${duplicate.presentation}" (ID: ${duplicate.id}). Si querés agregar stock, usá "Ajuste Stock manual" o "Recibir Remito Municipal".`
+            : `A product with this name and presentation already exists (ID: ${duplicate.id}). Use stock adjustment or receipt upload to add inventory.`,
+          severity: 'warning'
+        });
+        setIsSubmitting(false);
+        return;
       }
-      return p;
-    });
 
-    onAppendAudit({
-      id: `aud_${Date.now()}`,
-      timestamp: new Date().toISOString(),
-      userId: currentUser.id,
-      userName: currentUser.name,
-      userRole: currentUser.role,
-      action: 'CATALOG_UPDATE',
-      details: `Actualizó insumo catálogo: ${pName} (${pPresentation})`
-    });
+      const newId = `p_added_${Date.now()}`;
+      const newProduct: Product = {
+        id: newId,
+        name: pName.trim(),
+        presentation: pPresentation.trim(),
+        minStock: Number(pMinStock) || 10,
+        category: pCategory || 'Compartido',
+        shelfLetter: pShelfLetter || 'A',
+        shelfLevel: Number(pShelfLevel) || 1,
+        productType: pProductType || 'Med',
+        batches: [
+          { id: `b_init_${Date.now()}`, batchCode: 'L-NUEVO-01', expirationDate: '2027-12-31', quantity: 20 }
+        ],
+        allowedServices: pCategory === 'Compartido'
+          ? [PredefinedService.GUARDIA, PredefinedService.LABORATORIO, PredefinedService.IRAB, PredefinedService.FARMACIA]
+          : [pCategory as PredefinedService]
+      };
 
-  } else {
-    const newId = `p_added_${Date.now()}`;
-    const newProduct: Product = {
-      id: newId,
-      name: pName.trim(),
-      presentation: pPresentation.trim(),
-      minStock: Number(pMinStock) || 10,
-      category: pCategory || 'Compartido',
-      shelfLetter: pShelfLetter || 'A',
-      shelfLevel: Number(pShelfLevel) || 1,
-      productType: pProductType || 'Med',
-      batches: [
-        { id: `b_init_${Date.now()}`, batchCode: 'L-NUEVO-01', expirationDate: '2027-12-31', quantity: 20 }
-      ],
-      allowedServices: pCategory === 'Compartido' 
-        ? [PredefinedService.GUARDIA, PredefinedService.LABORATORIO, PredefinedService.IRAB, PredefinedService.FARMACIA]
-        : [pCategory as PredefinedService]
-    };
-    
-    updatedList.unshift(newProduct);
+      updatedList.unshift(newProduct);
 
-    onAppendAudit({
-      id: `aud_${Date.now()}`,
-      timestamp: new Date().toISOString(),
-      userId: currentUser.id,
-      userName: currentUser.name,
-      userRole: currentUser.role,
-      action: 'CATALOG_UPDATE',
-      details: `Agregó nuevo insumo a depósito: ${pName}`
-    });
+      onAppendAudit({
+        id: `aud_${Date.now()}`,
+        timestamp: new Date().toISOString(),
+        userId: currentUser.id,
+        userName: currentUser.name,
+        userRole: currentUser.role,
+        action: 'CATALOG_UPDATE',
+        details: `Agregó nuevo insumo a depósito: ${pName}`
+      });
+    }
+
+    onUpdateProducts(updatedList);
+    setPName('');
+    setPPresentation('');
+    setPMinStock(10);
+    setPShelfLetter('A');
+    setPShelfLevel(1);
+    setPProductType('Med');
+    setEditingProduct(null);
+    playBeep('success');
+  } finally {
+    setIsSubmitting(false);
   }
-
-  onUpdateProducts(updatedList);
-  setPName('');
-  setPPresentation('');
-  setPMinStock(10);
-  setPShelfLetter('A');
-  setPShelfLevel(1);
-  setPProductType('Med');
-  setEditingProduct(null);
-  playBeep('success');
 };
 
   const handleDeleteProduct = (pId: string) => {
@@ -2454,9 +2273,17 @@ const handleCreateOrUpdateUser = (e: React.FormEvent) => {
                   <button
                     id="admin-catalog-submit"
                     type="submit"
-                    className="flex-1 py-2 bg-orange-600 hover:bg-orange-700 text-white font-bold rounded-xl cursor-pointer"
+                    disabled={isSubmitting}
+                    className={`flex-1 py-2 font-bold rounded-xl transition ${
+                      isSubmitting
+                        ? 'bg-zinc-400 cursor-not-allowed'
+                        : 'bg-orange-600 hover:bg-orange-700 text-white cursor-pointer'
+                    }`}
                   >
-                    {editingProduct ? 'Editar' : 'Registrar Insumo'}
+                    {isSubmitting
+                      ? (lang === 'es' ? 'Guardando...' : 'Saving...')
+                      : (editingProduct ? 'Editar' : 'Registrar Insumo')
+                    }
                   </button>
                   {editingProduct && (
                     <button
@@ -2471,128 +2298,7 @@ const handleCreateOrUpdateUser = (e: React.FormEvent) => {
               </form>
             </div>
 
-            {/* Importador Masivo CSV */}
-            <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-5 shadow-sm space-y-4">
-              <h3 className="font-sans font-bold text-sm text-zinc-900 dark:text-zinc-50 border-b border-zinc-100 dark:border-zinc-800 pb-2 flex items-center gap-1.5">
-                <Upload size={14} className="text-orange-500" />
-                <span>{lang === 'es' ? 'Importar Catálogo (CSV/Excel)' : 'Bulk CSV/Excel Import'}</span>
-              </h3>
-              
-              <p className="text-[10px] text-zinc-400 leading-relaxed font-sans">
-                {lang === 'es' 
-                  ? 'Permite cargar insumos masivamente desde un archivo tabulado (CSV / Excel). Columnas: Nombre; Presentación; StockMínimo; Categoría; Lote(opc); Vencimiento(opc); Cantidad(opc); Estantería (opc, ej: A-Z); NivelEstante (opc, ej: 1-10).' 
-                  : 'Mass upload medications from a tabbed file. Columns supported: Name; Presentation; MinStock; Category; Batch(opt); Expiration(opt); Qty(opt); Shelf(opt, e.g. B); ShelfLevel(opt, e.g. 3).'}
-              </p>
-
-              {csvItems.length === 0 ? (
-                // Dropzone
-                <div 
-                  onDragOver={(e) => { e.preventDefault(); setIsDragOver(true); }}
-                  onDragLeave={() => setIsDragOver(false)}
-                  onDrop={(e) => {
-                    e.preventDefault();
-                    setIsDragOver(false);
-                    const file = e.dataTransfer.files?.[0];
-                    if (file) {
-                      setCsvFileName(file.name);
-                      const reader = new FileReader();
-                      reader.onload = (evt) => {
-                        if (evt.target?.result) {
-                          parseCSVText(evt.target.result as string);
-                        }
-                      };
-                      reader.readAsText(file);
-                    }
-                  }}
-                  className={`border-2 border-dashed rounded-xl p-5 text-center transition ${isDragOver ? 'border-orange-500 bg-orange-50/20' : 'border-zinc-200 dark:border-zinc-800 hover:border-zinc-300 dark:hover:border-zinc-700'}`}
-                >
-                  <label htmlFor="csv-file-upload" className="cursor-pointer space-y-2 block">
-                    <Upload size={20} className="mx-auto text-zinc-400" />
-                    <span className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300">
-                      {lang === 'es' ? 'Arrastra tu archivo CSV o haz click aquí' : 'Drag CSV files here or click to browse'}
-                    </span>
-                    <span className="block text-[9px] text-zinc-400">
-                      Formatos soportados: .csv, .txt (delimitado por coma, ; o tabulador)
-                    </span>
-                    <input 
-                      id="csv-file-upload"
-                      type="file"
-                      accept=".csv,.txt"
-                      className="hidden"
-                      onChange={(e) => {
-                        const file = e.target.files?.[0];
-                        if (file) {
-                          setCsvFileName(file.name);
-                          const reader = new FileReader();
-                          reader.onload = (evt) => {
-                            if (evt.target?.result) {
-                              parseCSVText(evt.target.result as string);
-                            }
-                          };
-                          reader.readAsText(file);
-                        }
-                      }}
-                    />
-                  </label>
-                </div>
-              ) : (
-                // Preview parsed items
-                <div className="space-y-3 font-sans">
-                  <div className="p-3 bg-orange-50 dark:bg-orange-950/20 border border-orange-200 dark:border-orange-900/30 rounded-xl flex items-center justify-between">
-                    <div>
-                      <p className="font-bold text-orange-900 dark:text-orange-300 text-xs">
-                        {lang === 'es' ? '✓ Insumos detectados' : '✓ Items detected'}
-                      </p>
-                      <p className="text-[10px] text-zinc-500 dark:text-zinc-400">
-                        {csvFileName} ({csvItems.length} {lang === 'es' ? 'filas procesadas' : 'rows processed'})
-                      </p>
-                    </div>
-                    <button 
-                      type="button"
-                      onClick={() => { setCsvItems([]); setCsvFileName(''); }}
-                      className="p-1 hover:bg-orange-100 dark:hover:bg-orange-900/40 rounded-lg text-orange-700 dark:text-orange-300 cursor-pointer"
-                    >
-                      <X size={14} />
-                    </button>
-                  </div>
-
-                  {/* Detalle previsualización */}
-                  <div className="max-h-[140px] overflow-y-auto border border-zinc-150 dark:border-zinc-800 rounded-xl divide-y divide-zinc-100 dark:divide-zinc-800 pr-1">
-                    {csvItems.map((item, idx) => (
-                      <div key={idx} className="p-2 text-[10px] flex justify-between items-center bg-zinc-50/40 dark:bg-zinc-950/20">
-                        <div className="truncate max-w-[130px]">
-                          <p className="font-bold text-zinc-800 dark:text-zinc-200 truncate">{item.name}</p>
-                          <p className="text-[9px] text-zinc-400 truncate">{item.presentation}</p>
-                        </div>
-                        <div className="text-right text-[9px] text-zinc-400 font-mono">
-                          <p className="text-orange-600 font-bold">{item.category}</p>
-                          <p>{lang === 'es' ? 'Stock Inicial: ' : 'Initial Qty:'} {item.quantity !== undefined ? item.quantity : 25}u.</p>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-
-                  <button 
-                    type="button"
-                    onClick={handleImportCSVConfirm}
-                    className="w-full py-2 bg-orange-600 hover:bg-orange-700 text-white font-bold text-xs rounded-xl flex items-center justify-center gap-1.5 cursor-pointer shadow-md shadow-orange-500/10 transition"
-                  >
-                    <FileSpreadsheet size={13} />
-                    <span>{lang === 'es' ? 'Confirmar Importación' : 'Verify & Commit Items'}</span>
-                  </button>
-                </div>
-              )}
-
-              {csvError && (
-                <div className="p-2 bg-red-50 dark:bg-red-950/20 border border-red-200 dark:border-red-900/30 text-red-600 rounded-xl text-[10px] font-semibold">
-                  {csvError}
-                </div>
-              )}
-            </div>
-
-          </div>
-
-          {/* Listado para Editar/Eliminar */}
+            {/* Listado para Editar/Eliminar */}
           <div className="lg:col-span-2 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-5 shadow-sm space-y-4">
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 border-b border-zinc-100 dark:border-zinc-800 pb-2">
               <h3 className="font-sans font-bold text-sm text-zinc-900 dark:text-zinc-50">
