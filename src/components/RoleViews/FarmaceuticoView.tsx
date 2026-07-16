@@ -2298,6 +2298,7 @@ const handleCreateOrUpdateUser = (e: React.FormEvent) => {
               </form>
             </div>
 
+          </div>
             {/* Listado para Editar/Eliminar */}
           <div className="lg:col-span-2 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-5 shadow-sm space-y-4">
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 border-b border-zinc-100 dark:border-zinc-800 pb-2">
