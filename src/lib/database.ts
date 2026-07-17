@@ -313,7 +313,7 @@ async function seedInitialData(): Promise<void> {
     { id: 'u3', email: 'laboratorio@test.com', name: 'Técnica Analía Ruiz (Laboratorio)', role: 'ENFERMERO', service: 'LABORATORIO', password: hashed123 },
     { id: 'u6', email: 'farmacia@test.com', name: 'Enfermero Diego Paz (Farmacia Dispensa)', role: 'ENFERMERO', service: 'FARMACIA', password: hashed123 },
     { id: 'u4', email: 'tecnico@test.com', name: 'Téc. Lucas Castro', role: 'TECNICO', password: hashed123 },
-    { id: 'u5', email: 'farmaceutico@test.com', name: 'Farm. Ramon H', role: 'FARMACEUTICO', password: hashed123 },
+    { id: 'u5', email: 'farmaceutico@test.com', name: 'Farm. Sofía Sabatto', role: 'FARMACEUTICO', password: hashed123 },
     { id: 'u7', email: 'director@test.com', name: 'Dr. Claudio Rossi (Director/a CAPS)', role: 'DIRECTOR', password: hashed123 }
   ]);
   if (usersError) console.error('[Supabase] Error insertando usuarios:', usersError);
@@ -330,8 +330,8 @@ async function seedInitialData(): Promise<void> {
   
   // Insertar logs de auditoría
   const { error: auditError } = await supabase.from('audit_logs').insert([
-    { user_id: 'u5', user_name: 'Farm. Ramon H', user_role: 'FARMACEUTICO', action: 'USER_UPDATE', details: 'Inicialización de perfiles de farmacia y técnicos en CAPS.' },
-    { user_id: 'u5', user_name: 'Farm. Ramon H', user_role: 'FARMACEUTICO', action: 'CATALOG_UPDATE', details: 'Carga inicial del catálogo de fármacos e insumos críticos FEFO.' }
+    { user_id: 'u5', user_name: 'Farm. Sofía Sabatto', user_role: 'FARMACEUTICO', action: 'USER_UPDATE', details: 'Inicialización de perfiles de farmacia y técnicos en CAPS.' },
+    { user_id: 'u5', user_name: 'Farm. Sofía Sabatto', user_role: 'FARMACEUTICO', action: 'CATALOG_UPDATE', details: 'Carga inicial del catálogo de fármacos e insumos críticos FEFO.' }
   ]);
   if (auditError) console.error('[Supabase] Error insertando logs:', auditError);
 }
