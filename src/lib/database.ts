@@ -180,18 +180,18 @@ export async function initializeDB(): Promise<{
   initialState: FullDBState;
   subscribe: (callback: (state: FullDBState) => void) => () => void;
 }> {
-  // Verificar si hay productos
-  const { count: productCount } = await supabase
-    .from('products')
+  // Verificar si hay usuarios (no productos) para decidir si cargar datos iniciales
+  const { count: userCount } = await supabase
+    .from('users')
     .select('*', { count: 'exact', head: true });
 
-  // Si no hay productos, cargar datos iniciales completos
-  if (!productCount || productCount === 0) {
+  // Si no hay usuarios, cargar datos iniciales completos
+  if (!userCount || userCount === 0) {
     console.log('[Supabase] Tablas vacías. Cargando datos iniciales...');
     await seedInitialData();
   } else {
-    // Si ya hay datos, verificar si hay usuarios con contraseñas en texto plano
-    console.log('[Supabase] Datos existentes detectados. Verificando contraseñas...');
+    // Si ya hay usuarios, verificar si hay contraseñas en texto plano
+    console.log('[Supabase] Usuarios existentes detectados. Verificando contraseñas...');
     await hashExistingPasswords();
   }
 
