@@ -306,7 +306,7 @@ async function seedInitialData(): Promise<void> {
   const hashed123 = await hashPassword('123');
 
   // Insertar usuarios con contraseñas hasheadas
-  const { error: usersError } = await supabase.from('users').insert([
+  const { error: usersError } = await supabase.from('users').upsert([
     { id: 'caps_admin', email: 'capsfarmaciasabatto@gmail.com', name: 'Farm. Principal Sabatto (Admin)', role: 'FARMACEUTICO', password: hashedAdmin },
     { id: 'u1', email: 'enfermero@test.com', name: 'Enfermera Marta Gómez (Guardia)', role: 'ENFERMERO', service: 'GUARDIA', password: hashed123 },
     { id: 'u2', email: 'irab@test.com', name: 'Enfermero Ariel Blanco (IRAB)', role: 'ENFERMERO', service: 'IRAB', password: hashed123 },
@@ -319,7 +319,7 @@ async function seedInitialData(): Promise<void> {
   if (usersError) console.error('[Supabase] Error insertando usuarios:', usersError);
 
   // Insertar configuraciones de servicios
-  const { error: configsError } = await supabase.from('service_configs').insert([
+  const { error: configsError } = await supabase.from('service_configs').upsert([
     { service_name: 'GUARDIA', order_day: 3, order_day_name: 'Miércoles', allow_daily: false },
     { service_name: 'LABORATORIO', order_day: 1, order_day_name: 'Lunes', allow_daily: false },
     { service_name: 'IRAB', order_day: 5, order_day_name: 'Viernes', allow_daily: true },
