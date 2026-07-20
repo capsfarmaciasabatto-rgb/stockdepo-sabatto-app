@@ -301,37 +301,10 @@ async function hashExistingPasswords(): Promise<void> {
  * Las contraseñas se guardan hasheadas.
  */
 async function seedInitialData(): Promise<void> {
-  // Hashear contraseñas
-  const hashedAdmin = await hashPassword('admin');
-  const hashed123 = await hashPassword('123');
-
-  // Insertar usuarios con contraseñas hasheadas
-  const { error: usersError } = await supabase.from('users').upsert([
-    { id: 'caps_admin', email: 'capsfarmaciasabatto@gmail.com', name: 'Farm. Principal Sabatto (Admin)', role: 'FARMACEUTICO', password: hashedAdmin },
-    { id: 'u1', email: 'enfermero@test.com', name: 'Enfermera Marta Gómez (Guardia)', role: 'ENFERMERO', service: 'GUARDIA', password: hashed123 },
-    { id: 'u2', email: 'irab@test.com', name: 'Enfermero Ariel Blanco (IRAB)', role: 'ENFERMERO', service: 'IRAB', password: hashed123 },
-    { id: 'u3', email: 'laboratorio@test.com', name: 'Técnica Analía Ruiz (Laboratorio)', role: 'ENFERMERO', service: 'LABORATORIO', password: hashed123 },
-    { id: 'u6', email: 'farmacia@test.com', name: 'Enfermero Diego Paz (Farmacia Dispensa)', role: 'ENFERMERO', service: 'FARMACIA', password: hashed123 },
-    { id: 'u4', email: 'tecnico@test.com', name: 'Téc. Lucas Castro', role: 'TECNICO', password: hashed123 },
-    { id: 'u5', email: 'farmaceutico@test.com', name: 'Farm. Sofía Sabatto', role: 'FARMACEUTICO', password: hashed123 },
-    { id: 'u7', email: 'director@test.com', name: 'Dr. Claudio Rossi (Director/a CAPS)', role: 'DIRECTOR', password: hashed123 }
-  ]);
-  if (usersError) console.error('[Supabase] Error insertando usuarios:', usersError);
-
-  // Insertar configuraciones de servicios
-  const { error: configsError } = await supabase.from('service_configs').upsert([
-    { service_name: 'GUARDIA', order_day: 3, order_day_name: 'Miércoles', allow_daily: false },
-    { service_name: 'LABORATORIO', order_day: 1, order_day_name: 'Lunes', allow_daily: false },
-    { service_name: 'IRAB', order_day: 5, order_day_name: 'Viernes', allow_daily: true },
-    { service_name: 'FARMACIA', order_day: 2, order_day_name: 'Martes', allow_daily: true }
-  ]);
-  if (configsError) console.error('[Supabase] Error insertando configs:', configsError);
-
-  
   // Insertar logs de auditoría
   const { error: auditError } = await supabase.from('audit_logs').insert([
-    { user_id: 'u5', user_name: 'Farm. Sofía Sabatto', user_role: 'FARMACEUTICO', action: 'USER_UPDATE', details: 'Inicialización de perfiles de farmacia y técnicos en CAPS.' },
-    { user_id: 'u5', user_name: 'Farm. Sofía Sabatto', user_role: 'FARMACEUTICO', action: 'CATALOG_UPDATE', details: 'Carga inicial del catálogo de fármacos e insumos críticos FEFO.' }
+    { user_id: 'u5', user_name: 'Farm. Ramon Sabatto', user_role: 'FARMACEUTICO', action: 'USER_UPDATE', details: 'Inicialización de perfiles de farmacia y técnicos en CAPS.' },
+    { user_id: 'u5', user_name: 'Farm. Ramon Sabatto', user_role: 'FARMACEUTICO', action: 'CATALOG_UPDATE', details: 'Carga inicial del catálogo de fármacos e insumos críticos FEFO.' }
   ]);
   if (auditError) console.error('[Supabase] Error insertando logs:', auditError);
 }
