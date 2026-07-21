@@ -214,10 +214,13 @@ export async function initializeDB(): Promise<{
   // Suscribirse a cambios en tiempo real
   const subscribe = (callback: (state: FullDBState) => void) => {
     const channels = [
-      supabase.channel('products-changes')
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'products' }, () => refreshState(callback)),
-      supabase.channel('batches-changes')
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'batches' }, () => refreshState(callback)),
+      // NOTA: Desactivados realtime para products y batches para evitar
+      // que pisen el estado local durante edición manual de asignaciones.
+      // Los cambios se refrescan al recargar la página o navegar entre tabs.
+      // supabase.channel('products-changes')
+      //   .on('postgres_changes', { event: '*', schema: 'public', table: 'products' }, () => refreshState(callback)),
+      // supabase.channel('batches-changes')
+      //   .on('postgres_changes', { event: '*', schema: 'public', table: 'batches' }, () => refreshState(callback)),
       supabase.channel('orders-changes')
         .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, () => refreshState(callback)),
       supabase.channel('order_items-changes')
