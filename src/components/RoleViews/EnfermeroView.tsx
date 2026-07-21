@@ -60,7 +60,19 @@ export default function EnfermeroView({
 
   // Filtrar productos asignados a este servicio o compartidos
   const allowedProducts = useMemo(() => {
-    return products.filter(p => p.allowedServices.includes(service));
+    return products.filter(p => {
+      // Si allowedServices está definido y tiene elementos, usarlo
+      if (Array.isArray(p.allowedServices) && p.allowedServices.length > 0) {
+        return p.allowedServices.includes(service);
+      }
+      // Fallback: si no hay allowedServices, usar la categoría del producto
+      // Si es 'Compartido', todos los servicios pueden verlo
+      // Si es un servicio específico, solo ese servicio puede verlo
+      if ((p.category as string) === 'Compartido') {
+        return true;
+      }
+      return p.category === service;
+    });
   }, [products, service]);
 
   const filteredProducts = useMemo(() => {
