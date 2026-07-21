@@ -14,7 +14,7 @@ import TecnicoView from './components/RoleViews/TecnicoView';
 import FarmaceuticoView from './components/RoleViews/FarmaceuticoView';
 import DirectorView from './components/RoleViews/DirectorView';
 import { playBeep } from './lib/sound';
-import { Activity, AlertCircle } from 'lucide-react';
+import { Activity, AlertCircle, Calendar, RefreshCw } from 'lucide-react';
 
 export default function App() {
   // --- CORE SYSTEM STATES ---
@@ -257,10 +257,8 @@ export default function App() {
     if (!dbState) return;
 
     try {
-      // Guardar pedido en Supabase usando addOrder
       await addOrder(order);
 
-      // Guardar log de auditoría
       await appendAuditLog({
         id: `aud_${Date.now()}`,
         timestamp: new Date().toISOString(),
@@ -271,7 +269,6 @@ export default function App() {
         details: `Generó nuevo pedido (${order.type === 'Extraordinario' ? 'Extraordinario' : 'Semanal'}) para sector ${order.service}.`
       });
 
-      // Actualizar estado local
       const updatedOrders = [order, ...dbState.orders];
       const updatedState = { ...dbState, orders: updatedOrders };
       setDbState(updatedState);
@@ -335,7 +332,6 @@ export default function App() {
 
       const currentOrder = dbState.orders.find(o => o.id === orderId);
 
-      // Actualizar pedido en Supabase
       await updateOrder(orderId, {
         status: 'Preparado',
         preparedBy: {
@@ -344,16 +340,13 @@ export default function App() {
         }
       });
 
-      // Actualizar items del pedido en Supabase (approvedQuantity y assignedBatches)
       const preparedOrder = updatedOrders.find(o => o.id === orderId);
       if (preparedOrder) {
         await updateOrderItems(orderId, preparedOrder.items);
       }
 
-      // Actualizar productos en Supabase (stock descontado con lotes)
       await saveDBState({ ...dbState, products: updatedProducts });
 
-      // Guardar log de auditoría
       await appendAuditLog({
         id: `aud_${Date.now()}`,
         timestamp: new Date().toISOString(),
@@ -397,7 +390,6 @@ export default function App() {
 
       const currentOrder = dbState.orders.find(o => o.id === orderId);
 
-      // Actualizar pedido en Supabase
       await updateOrder(orderId, {
         status: 'Entregado',
         deliveryDate: new Date().toISOString(),
@@ -407,7 +399,6 @@ export default function App() {
         }
       });
 
-      // Guardar log de auditoría
       await appendAuditLog({
         id: `aud_${Date.now()}`,
         timestamp: new Date().toISOString(),
@@ -578,6 +569,53 @@ export default function App() {
       case Role.FARMACEUTICO:
         return (
           <div className="space-y-6">
+            {/* Banner de Control del Fin de Mes para el Farmacéutico */}
+            <div className="bg-purple-50 dark:bg-purple-950/30 border border-purple-200 dark:border-purple-900/40 p-4 rounded-2xl flex flex-col md:flex-row items-center justify-between gap-4">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 bg-purple-100 dark:bg-purple-900/50 text-purple-700 dark:text-purple-300 rounded-xl shrink-0">
+                  <Calendar className="size-5" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h4 className="text-sm font-bold text-purple-950 dark:text-purple-200">
+                      {lang === 'es' ? 'Simulador de Fin de Mes (Auditoría FEFO)' : 'Month-End Simulator (FEFO Audit)'}
+                    </h4>
+                    {isLastBusinessDayActive && (
+                      <span className="px-2 py-0.5 bg-purple-600 text-white text-[10px] font-bold rounded-full uppercase tracking-wider animate-pulse">
+                        {lang === 'es' ? 'Activo' : 'Active'}
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-xs text-purple-700 dark:text-purple-300/80 mt-0.5">
+                    {lang === 'es' 
+                      ? 'Activa el modo de último día hábil para ejecutar descartes automáticos de lotes vencidos o por vencer.'
+                      : 'Activate last business day mode to execute automated discards of expired/expiring batches.'}
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-3 w-full md:w-auto justify-end">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSimulateLastBusinessDay(!simulateLastBusinessDay);
+                    playBeep('beep');
+                  }}
+                  className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-2 shadow-xs cursor-pointer ${
+                    simulateLastBusinessDay
+                      ? 'bg-purple-600 text-white hover:bg-purple-700'
+                      : 'bg-white dark:bg-slate-800 text-purple-700 dark:text-purple-300 border border-purple-200 dark:border-purple-800 hover:bg-purple-50 dark:hover:bg-purple-900/30'
+                  }`}
+                >
+                  <RefreshCw className={`size-3.5 ${simulateLastBusinessDay ? 'animate-spin' : ''}`} />
+                  {simulateLastBusinessDay 
+                    ? (lang === 'es' ? 'Desactivar Simulación' : 'Disable Simulation')
+                    : (lang === 'es' ? 'Simular Fin de Mes' : 'Simulate Month-End')
+                  }
+                </button>
+              </div>
+            </div>
+
             <div className="bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-4 rounded-2xl flex items-start gap-3">
               <span className="p-1 px-1.5 bg-orange-100 dark:bg-orange-950 rounded font-bold font-mono text-[10px] text-orange-700 dark:text-orange-300 uppercase shrink-0">VISTA DIRECTA</span>
               <p className="text-xs text-slate-700 dark:text-slate-300 font-sans tracking-tight leading-relaxed">
