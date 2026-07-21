@@ -14,6 +14,7 @@ import TecnicoView from './components/RoleViews/TecnicoView';
 import FarmaceuticoView from './components/RoleViews/FarmaceuticoView';
 import DirectorView from './components/RoleViews/DirectorView';
 import { playBeep } from './lib/sound';
+import { supabase } from './lib/supabase';
 import { Activity, AlertCircle, Calendar, RefreshCw } from 'lucide-react';
 
 export default function App() {
@@ -434,13 +435,79 @@ export default function App() {
 
   const handleUpdateProducts = async (updatedProducts: Product[]) => {
     if (!dbState) return;
+
+    // ACTUALIZAR ESTADO LOCAL INMEDIATAMENTE (la UI responde al toque)
     const updatedState = { ...dbState, products: updatedProducts };
+    setDbState(updatedState);
+
+    // GUARDAR EN SUPABASE SOLO LOS PRODUCTOS QUE CAMBIARON
     try {
-      await saveDBState(updatedState);
-      setDbState(updatedState);
+      const oldProducts = dbState.products;
+      const changedProducts = updatedProducts.filter((newProd) => {
+        const oldProd = oldProducts.find(p => p.id === newProd.id);
+        if (!oldProd) return true; // Producto nuevo
+        return JSON.stringify(newProd.allowedServices) !== JSON.stringify(oldProd.allowedServices) ||
+               JSON.stringify(newProd.batches) !== JSON.stringify(oldProd.batches) ||
+               newProd.name !== oldProd.name ||
+               newProd.presentation !== oldProd.presentation ||
+               newProd.minStock !== oldProd.minStock ||
+               newProd.category !== oldProd.category ||
+               newProd.shelfLetter !== oldProd.shelfLetter ||
+               newProd.shelfLevel !== oldProd.shelfLevel ||
+               newProd.productType !== oldProd.productType;
+      });
+
+      if (changedProducts.length > 0) {
+        const productsToSave = changedProducts.map(p => ({
+          id: p.id,
+          name: p.name,
+          presentation: p.presentation,
+          min_stock: p.minStock,
+          category: p.category,
+          product_type: p.productType,
+          shelf_letter: p.shelfLetter,
+          shelf_level: p.shelfLevel,
+          allowed_services: p.allowedServices
+        }));
+
+        const { error } = await supabase
+          .from('products')
+          .upsert(productsToSave);
+
+        if (error) {
+          console.error('[Supabase] Error upsert products:', error);
+          throw error;
+        }
+
+        // Guardar batches también
+        const batchesToSave = changedProducts.flatMap(p => 
+          p.batches.map(b => ({
+            id: b.id,
+            product_id: p.id,
+            batch_code: b.batchCode,
+            expiration_date: b.expirationDate,
+            quantity: b.quantity
+          }))
+        );
+
+        if (batchesToSave.length > 0) {
+          const { error: batchError } = await supabase
+            .from('batches')
+            .upsert(batchesToSave);
+
+          if (batchError) {
+            console.error('[Supabase] Error upsert batches:', batchError);
+            throw batchError;
+          }
+        }
+
+        console.log('[App] Productos actualizados en Supabase:', changedProducts.map(p => p.name));
+      }
     } catch (error) {
       console.error('Error guardando productos:', error);
       alert('Error al guardar productos. Revisa la consola.');
+      // Revertir al estado anterior si falló
+      setDbState(dbState);
     }
   };
 
