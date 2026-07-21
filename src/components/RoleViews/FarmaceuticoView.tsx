@@ -1432,27 +1432,54 @@ const handleCreateOrUpdateProduct = (e: React.FormEvent) => {
 
   // ASIGNACIÓN MUCHOS A MUCHOS
   const handleToggleMapping = (productId: string, serviceName: string) => {
-    const updated = products.map(p => {
-      if (p.id === productId) {
-        const allowed = Array.isArray(p.allowedServices) 
-          ? [...p.allowedServices] 
-          : (p.category as string) === 'Compartido'
-            ? [PredefinedService.GUARDIA, PredefinedService.LABORATORIO, PredefinedService.IRAB, PredefinedService.FARMACIA]
-            : [p.category].filter((c): c is PredefinedService => (c as string) !== 'Compartido');
+    // 1. ENCONTRAR EL PRODUCTO ACTUAL
+    const product = products.find(p => p.id === productId);
+    if (!product) return;
 
-        let nextAllowed: string[];
-        if (allowed.includes(serviceName)) {
-          nextAllowed = allowed.filter(s => s !== serviceName);
-        } else {
-          nextAllowed = [...allowed, serviceName];
-        }
+    // 2. OBTENER LA LISTA ACTUAL DE SERVICIOS PERMITIDOS
+    // Si allowedServices es undefined/null, usar la categoría como fallback
+    let currentAllowed: string[] = [];
 
-        return { ...p, allowedServices: nextAllowed };
-      }
-      return p;
+    if (Array.isArray(product.allowedServices) && product.allowedServices.length > 0) {
+      currentAllowed = [...product.allowedServices];
+    } else if (product.category === 'Compartido') {
+      currentAllowed = [PredefinedService.GUARDIA, PredefinedService.LABORATORIO, PredefinedService.IRAB, PredefinedService.FARMACIA];
+    } else if (product.category && product.category !== 'Compartido') {
+      currentAllowed = [product.category];
+    }
+
+    // 3. CALCULAR LA NUEVA LISTA (toggle: si está, lo saco; si no, lo pongo)
+    const isCurrentlyAllowed = currentAllowed.includes(serviceName);
+    const nextAllowed = isCurrentlyAllowed
+      ? currentAllowed.filter(s => s !== serviceName)  // Quitar
+      : [...currentAllowed, serviceName];               // Agregar
+
+    // 4. LOG PARA DEBUG (lo vas a ver en la consola)
+    console.log(`[ToggleMapping] ${product.name}:`, {
+      antes: currentAllowed,
+      despues: nextAllowed,
+      accion: isCurrentlyAllowed ? 'QUITAR' : 'AGREGAR',
+      servicio: serviceName
     });
 
-    onUpdateProducts(updated);
+    // 5. CREAR EL PRODUCTO ACTUALIZADO
+    const updatedProduct = {
+      ...product,
+      allowedServices: nextAllowed,
+      // Si quedó con más de un servicio, la categoría pasa a "Compartido"
+      category: nextAllowed.length > 1 ? 'Compartido' as any : (nextAllowed[0] || product.category)
+    };
+
+    // 6. CREAR LA LISTA COMPLETA DE PRODUCTOS ACTUALIZADA
+    const updatedProducts = products.map(p => 
+      p.id === productId ? updatedProduct : p
+    );
+
+    // 7. ACTUALIZAR EL ESTADO LOCAL INMEDIATAMENTE (antes de guardar en Supabase)
+    // Esto hace que el botón cambie visualmente al instante
+    onUpdateProducts(updatedProducts);
+
+    // 8. AUDITORÍA
     onAppendAudit({
       id: `aud_${Date.now()}`,
       timestamp: new Date().toISOString(),
@@ -1460,7 +1487,7 @@ const handleCreateOrUpdateProduct = (e: React.FormEvent) => {
       userName: currentUser.name,
       userRole: currentUser.role,
       action: 'CATALOG_UPDATE',
-      details: `Modificó matriz de servicios para medicamento ID: ${productId}`
+      details: `Modificó visibilidad de ${product.name}: ${isCurrentlyAllowed ? 'quitó' : 'agregó'} ${serviceName}. Ahora: ${nextAllowed.join(', ')}`
     });
   };
 
