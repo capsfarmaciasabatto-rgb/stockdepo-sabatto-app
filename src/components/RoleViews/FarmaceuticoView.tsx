@@ -1442,9 +1442,9 @@ const handleCreateOrUpdateProduct = (e: React.FormEvent) => {
 
     if (Array.isArray(product.allowedServices) && product.allowedServices.length > 0) {
       currentAllowed = [...product.allowedServices];
-    } else if (product.category === 'Compartido') {
+    } else if ((product.category as string) === 'Compartido') {
       currentAllowed = [PredefinedService.GUARDIA, PredefinedService.LABORATORIO, PredefinedService.IRAB, PredefinedService.FARMACIA];
-    } else if (product.category && product.category !== 'Compartido') {
+    } else if (product.category && (product.category as string) !== 'Compartido') {
       currentAllowed = [product.category];
     }
 
