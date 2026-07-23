@@ -14,7 +14,7 @@ import {
   Role, 
   PredefinedService, 
   ServiceConfiguration,
-  StockBatch
+  StockBatch,
   normalizeServiceName 
 } from '../../types';
 import { runIntegrationTests, TestResult } from '../../lib/testRunner';
