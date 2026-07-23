@@ -3,6 +3,22 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+// ============================================================
+// HELPERS DE NORMALIZACIÓN
+// ============================================================
+
+/**
+ * Normaliza un nombre de servicio para comparación segura.
+ * Elimina espacios, convierte a mayúsculas, maneja null/undefined.
+ */
+export function normalizeServiceName(name: string | undefined | null): string {
+  return (name || '').toString().trim().toUpperCase();
+}
+
+// ============================================================
+// ENUMS
+// ============================================================
+
 export enum Role {
   ENFERMERO = 'ENFERMERO',
   TECNICO = 'TECNICO',
@@ -16,6 +32,10 @@ export enum PredefinedService {
   IRAB = 'IRAB',
   FARMACIA = 'FARMACIA',
 }
+
+// ============================================================
+// INTERFACES
+// ============================================================
 
 export interface User {
   id: string;
@@ -109,14 +129,4 @@ export interface FullDBState {
   users: User[];
   auditLogs: AuditLog[];
   serviceConfigs: ServiceConfiguration[];
-  // ============================================================
-// HELPERS DE NORMALIZACIÓN
-// ============================================================
-
-/**
- * Normaliza un nombre de servicio para comparación segura.
- * Elimina espacios, convierte a mayúsculas, maneja null/undefined.
- */
-export function normalizeServiceName(name: string | undefined | null): string {
-  return (name || '').toString().trim().toUpperCase();
 }
