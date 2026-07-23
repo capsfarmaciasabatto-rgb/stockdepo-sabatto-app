@@ -109,4 +109,14 @@ export interface FullDBState {
   users: User[];
   auditLogs: AuditLog[];
   serviceConfigs: ServiceConfiguration[];
+  // ============================================================
+// HELPERS DE NORMALIZACIÓN
+// ============================================================
+
+/**
+ * Normaliza un nombre de servicio para comparación segura.
+ * Elimina espacios, convierte a mayúsculas, maneja null/undefined.
+ */
+export function normalizeServiceName(name: string | undefined | null): string {
+  return (name || '').toString().trim().toUpperCase();
 }
