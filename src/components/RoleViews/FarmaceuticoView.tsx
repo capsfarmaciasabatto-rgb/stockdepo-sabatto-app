@@ -15,6 +15,7 @@ import {
   PredefinedService, 
   ServiceConfiguration,
   StockBatch
+  normalizeServiceName 
 } from '../../types';
 import { runIntegrationTests, TestResult } from '../../lib/testRunner';
 import { 
@@ -1431,10 +1432,14 @@ const handleCreateOrUpdateProduct = (e: React.FormEvent) => {
   };
 
   // ASIGNACIÓN MUCHOS A MUCHOS
+  // ASIGNACIÓN MUCHOS A MUCHOS
   const handleToggleMapping = (productId: string, serviceName: string) => {
     // 1. ENCONTRAR EL PRODUCTO ACTUAL
     const product = products.find(p => p.id === productId);
     if (!product) return;
+
+    // FIX: Normalizar el nombre del servicio a toggle para comparación segura
+    const normalizedToggleService = normalizeServiceName(serviceName);
 
     // 2. OBTENER LA LISTA ACTUAL DE SERVICIOS PERMITIDOS
     // Si allowedServices es undefined/null, usar la categoría como fallback
@@ -1448,11 +1453,14 @@ const handleCreateOrUpdateProduct = (e: React.FormEvent) => {
       currentAllowed = [product.category];
     }
 
-    // 3. CALCULAR LA NUEVA LISTA (toggle: si está, lo saco; si no, lo pongo)
-    const isCurrentlyAllowed = currentAllowed.includes(serviceName);
+    // FIX: 3. CALCULAR LA NUEVA LISTA (toggle: si está, lo saco; si no, lo pongo)
+    // Comparar normalizando para evitar problemas de mayúsculas/espacios
+    const isCurrentlyAllowed = currentAllowed.some(
+      s => normalizeServiceName(s) === normalizedToggleService
+    );
     const nextAllowed = isCurrentlyAllowed
-      ? currentAllowed.filter(s => s !== serviceName)  // Quitar
-      : [...currentAllowed, serviceName];               // Agregar
+      ? currentAllowed.filter(s => normalizeServiceName(s) !== normalizedToggleService)  // Quitar
+      : [...currentAllowed, serviceName];                                               // Agregar (guardar el original del enum)
 
     // 4. LOG PARA DEBUG (lo vas a ver en la consola)
     console.log(`[ToggleMapping] ${product.name}:`, {
