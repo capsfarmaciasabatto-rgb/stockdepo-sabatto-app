@@ -42,7 +42,17 @@ export default function EnfermeroView({
   const [expandedOrderId, setExpandedOrderId] = useState<string | null>(null);
 
   const t = translations[lang];
-  const service = currentUser.service || PredefinedService.GUARDIA;
+  const inferServiceFromEmail = (email: string): string => {
+  if (!email) return PredefinedService.GUARDIA;
+  const lowerEmail = email.toLowerCase();
+  if (lowerEmail.includes('guardia')) return PredefinedService.GUARDIA;
+  if (lowerEmail.includes('laboratorio')) return PredefinedService.LABORATORIO;
+  if (lowerEmail.includes('irab')) return PredefinedService.IRAB;
+  if (lowerEmail.includes('farmacia')) return PredefinedService.FARMACIA;
+  return PredefinedService.GUARDIA;
+};
+
+const service = currentUser.service || inferServiceFromEmail(currentUser.email) || PredefinedService.GUARDIA;
 
   // Encontrar configuración semanal para este servicio
   const config = useMemo(() => {
