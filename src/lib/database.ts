@@ -56,7 +56,9 @@ async function getProductsWithBatches(): Promise<Product[]> {
     productType: product.product_type,
     shelfLetter: product.shelf_letter,
     shelfLevel: product.shelf_level,
-    allowedServices: product.allowed_services || [],
+    allowedServices: (typeof product.allowed_services === 'string'
+      ? JSON.parse(product.allowed_services)
+      : product.allowed_services) || [],
     batches: (batches || [])
       .filter(b => b.product_id === product.id)
       .map(b => ({
