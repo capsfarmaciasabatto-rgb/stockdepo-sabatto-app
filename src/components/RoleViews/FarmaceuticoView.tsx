@@ -3438,7 +3438,6 @@ const handleCreateOrUpdateUser = (e: React.FormEvent) => {
                   </button>
                 </div>
 
-                {/* Filtro de Búsqueda de la Planilla */}
                 {/* Filtro de Sala/Servicio */}
                 <div className="flex items-center gap-2 max-w-xs">
                   <label className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider whitespace-nowrap">
@@ -3456,6 +3455,7 @@ const handleCreateOrUpdateUser = (e: React.FormEvent) => {
                     <option value={PredefinedService.FARMACIA}>Farmacia</option>
                   </select>
                 </div>
+                {/* Filtro de Búsqueda de la Planilla */}
                 <div className="p-1 bg-zinc-50 dark:bg-zinc-950 rounded-xl border border-zinc-150 dark:border-zinc-850 max-w-md flex items-center gap-2">
                   <span className="text-zinc-400 pl-2">🔍</span>
                   <input
