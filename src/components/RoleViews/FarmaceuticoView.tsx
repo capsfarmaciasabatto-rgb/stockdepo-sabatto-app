@@ -88,6 +88,7 @@ export default function FarmaceuticoView({
   const [subTab, setSubTab] = useState<'catalog' | 'mapping' | 'adjust' | 'users' | 'reports' | 'receipt' | 'history_deliveries' | 'monthly_discard'>('catalog');
   const [reportType, setReportType] = useState<'consumption' | 'movements' | 'audit' | 'expiring' | 'low_stock' | 'tests' | 'unsatisfied'>('consumption');
   const [consumptionSearch, setConsumptionSearch] = useState('');
+  const [consumptionServiceFilter, setConsumptionServiceFilter] = useState<string>('ALL');
   const [semaforoFilter, setSemaforoFilter] = useState<'All' | 'Rojo' | 'Amarillo' | 'Verde' | 'Vencido'>('All');
 
   // Estados para consulta de historial de entregas
@@ -1738,19 +1739,27 @@ const handleCreateOrUpdateUser = (e: React.FormEvent) => {
   // --- DINAMIC CPM & PLANILLA DE CONSUMO MENSUAL (ÚLTIMOS 6 MESES COLUMNAS) ---
   const months = useMemo(() => {
     const list: { key: string; label: string }[] = [];
-    const now = new Date();
-    for (let i = 5; i >= 0; i--) {
-      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
-      const yyyy = d.getFullYear();
-      const mm = String(d.getMonth() + 1).padStart(2, '0');
-      const monthLabel = d.toLocaleString(lang === 'es' ? 'es-AR' : 'en-US', { month: 'short' });
+    const start = new Date(startDate);
+    const end = new Date(endDate);
+    if (isNaN(start.getTime()) || isNaN(end.getTime()) || start > end) return list;
+
+    let cursor = new Date(start.getFullYear(), start.getMonth(), 1);
+    const lastMonth = new Date(end.getFullYear(), end.getMonth(), 1);
+
+    let safety = 0;
+    while (cursor <= lastMonth && safety < 24) {
+      const yyyy = cursor.getFullYear();
+      const mm = String(cursor.getMonth() + 1).padStart(2, '0');
+      const monthLabel = cursor.toLocaleString(lang === 'es' ? 'es-AR' : 'en-US', { month: 'short' });
       list.push({
         key: `${yyyy}-${mm}`,
         label: `${monthLabel.toUpperCase()} ${yyyy}`
       });
+      cursor = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1);
+      safety++;
     }
     return list;
-  }, [lang]);
+  }, [startDate, endDate, lang]);
 
   const monthlyConsumptionData = useMemo(() => {
     return products.map(p => {
@@ -1761,6 +1770,7 @@ const handleCreateOrUpdateUser = (e: React.FormEvent) => {
 
       orders
         .filter(o => o.status === 'Entregado')
+        .filter(o => consumptionServiceFilter === 'ALL' || normalizeServiceName(o.service) === consumptionServiceFilter)
         .forEach(ord => {
           const yyyyMm = ord.requestDate.substring(0, 7); // "YYYY-MM"
           if (dynamicQty[yyyyMm] !== undefined) {
@@ -1787,7 +1797,7 @@ const handleCreateOrUpdateUser = (e: React.FormEvent) => {
         suggested
       };
     });
-  }, [products, orders, months]);
+  }, [products, orders, months, consumptionServiceFilter]);
 
   const filteredConsumptionData = useMemo(() => {
     if (!consumptionSearch.trim()) return monthlyConsumptionData;
@@ -3429,6 +3439,23 @@ const handleCreateOrUpdateUser = (e: React.FormEvent) => {
                 </div>
 
                 {/* Filtro de Búsqueda de la Planilla */}
+                {/* Filtro de Sala/Servicio */}
+                <div className="flex items-center gap-2 max-w-xs">
+                  <label className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider whitespace-nowrap">
+                    {lang === 'es' ? 'Sala:' : 'Ward:'}
+                  </label>
+                  <select
+                    value={consumptionServiceFilter}
+                    onChange={(e) => setConsumptionServiceFilter(e.target.value)}
+                    className="w-full p-1.5 bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-xl text-xs text-zinc-800 dark:text-zinc-100 font-medium focus:ring-1 focus:ring-orange-500 cursor-pointer"
+                  >
+                    <option value="ALL">{lang === 'es' ? 'Todas las salas' : 'All wards'}</option>
+                    <option value={PredefinedService.GUARDIA}>Guardia</option>
+                    <option value={PredefinedService.IRAB}>IRAB</option>
+                    <option value={PredefinedService.LABORATORIO}>Laboratorio</option>
+                    <option value={PredefinedService.FARMACIA}>Farmacia</option>
+                  </select>
+                </div>
                 <div className="p-1 bg-zinc-50 dark:bg-zinc-950 rounded-xl border border-zinc-150 dark:border-zinc-850 max-w-md flex items-center gap-2">
                   <span className="text-zinc-400 pl-2">🔍</span>
                   <input
