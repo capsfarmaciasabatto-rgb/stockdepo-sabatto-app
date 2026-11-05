@@ -111,3 +111,12 @@ export interface ServiceConfiguration {
   orderDayName: string; // "Lunes", "Martes", etc.
   allowDaily: boolean; // Si puede pedir diariamente (IRAB por defecto true)
 }
+
+export interface FullDBState {
+  products: Product[];
+  orders: Order[];
+  users: User[];
+  auditLogs: AuditLog[];
+  serviceConfigs: ServiceConfiguration[];
+}
+

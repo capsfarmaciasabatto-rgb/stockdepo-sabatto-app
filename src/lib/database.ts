@@ -11,8 +11,11 @@ import {
   Role, 
   PredefinedService, 
   ServiceConfiguration,
-  MedicationOrigin
+  MedicationOrigin,
+  FullDBState
 } from '../types';
+
+export type { FullDBState };
 
 // Datos iniciales de fármacos e insumos (lista realista para CAPS de Argentina - 55 insumos)
 const INITIAL_PRODUCTS: Product[] = [
@@ -437,14 +440,6 @@ const INITIAL_AUDITS: AuditLog[] = [
     details: 'Carga inicial del catálogo de fármacos e insumos críticos FEFO.'
   }
 ];
-
-export interface FullDBState {
-  products: Product[];
-  orders: Order[];
-  users: User[];
-  auditLogs: AuditLog[];
-  serviceConfigs: ServiceConfiguration[];
-}
 
 const STORAGE_KEY = 'sabatto_stock_db_state';
 
