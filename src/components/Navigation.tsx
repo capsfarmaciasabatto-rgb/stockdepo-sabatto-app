@@ -5,7 +5,7 @@
 
 import { useState } from 'react';
 import { translations } from '../translations';
-import { User, Role } from '../types';
+import { User, Role, PredefinedService } from '../types';
 import farmaciaLogo from '../assets/images/farmacia_logo_1780424589468.png';
 import { 
   LogOut, 
@@ -84,12 +84,7 @@ export default function Navigation({
         return role;
     }
   };
-  
-  // Solo Farmacéutico Principal (Admin) y Director pueden simular otros roles
-  const canSwitchRoles = (role: Role) => {
-    return role === Role.FARMACEUTICO || role === Role.DIRECTOR;
-  };
-  
+
   return (
     <nav className="bg-white dark:bg-zinc-950 border-b border-zinc-200 dark:border-zinc-900 sticky top-0 z-50 transition-colors duration-300 shadow-sm">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -227,19 +222,20 @@ export default function Navigation({
               </button>
 
               {profileOpen && (
-                <div className="absolute right-0 mt-2 w-64 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl shadow-xl py-3 z-50">
+                <div className="absolute right-0 mt-2 w-72 sm:w-80 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl shadow-xl py-3 z-50">
                   <div className="px-4 pb-2 border-b border-zinc-100 dark:border-zinc-800">
                     <p className="text-xs font-bold text-zinc-950 dark:text-zinc-50 truncate">{currentUser.name}</p>
-                    <p className="text-[11px] text-zinc-400 font-mono truncate">{currentUser.email}</p>
+                    <p className="text-[11px] text-zinc-400 font-mono truncate">{currentUser.email} • {currentUser.service ? currentUser.service : getRoleLabel(currentUser.role)}</p>
                   </div>
 
-              {/* Alternar perfiles rápido - Solo visible para Admin y Director */}
-                  {canSwitchRoles(currentUser.role) && (
-                    <div className="p-2 space-y-1">
-                      <span className="text-[10px] font-extrabold uppercase font-mono tracking-widest text-orange-600 dark:text-orange-400 block px-2 pt-1 pb-1">
-                        Simular Otro Rol
-                      </span>
-                      {allUsers.map((u) => (
+                  {/* Alternar perfiles rápido (Requisito estricto de demo) */}
+                  <div className="p-2 space-y-1 max-h-[360px] overflow-y-auto">
+                    <span className="text-[10px] font-extrabold uppercase font-mono tracking-widest text-orange-600 dark:text-orange-400 block px-2 pt-1 pb-1">
+                      Simular Otro Rol / Sector
+                    </span>
+                    {allUsers.map((u) => {
+                      const serviceBadge = u.role === Role.ENFERMERO ? (u.service || 'Sector') : (u.role === Role.DIRECTOR ? 'Dirección CAPS' : (u.role === Role.TECNICO ? 'Depósito Central' : 'Farmacéutico'));
+                      return (
                         <button
                           key={u.id}
                           onClick={() => {
@@ -248,15 +244,18 @@ export default function Navigation({
                           }}
                           className={`w-full text-left px-3 py-2 rounded-xl text-xs font-semibold font-sans flex items-center justify-between cursor-pointer transition duration-150 ${currentUser.id === u.id ? 'bg-orange-50/50 dark:bg-orange-950/20 text-orange-600 dark:text-orange-400 border border-orange-500/10' : 'hover:bg-zinc-50 dark:hover:bg-zinc-800/40 text-zinc-700 dark:text-zinc-300'}`}
                         >
-                          <div className="flex items-center gap-2">
-                            <span className={`size-2 rounded-full ${u.role === Role.FARMACEUTICO ? 'bg-orange-600' : u.role === Role.TECNICO ? 'bg-slate-700' : u.role === Role.DIRECTOR ? 'bg-teal-600' : 'bg-slate-500'}`}></span>
-                            <span>{u.name.split(' ')[0]} <span className="font-mono text-[10px] text-zinc-400">({u.role === Role.ENFERMERO ? u.service : (u.role === Role.DIRECTOR ? 'Dirección' : 'Depósito')})</span></span>
+                          <div className="flex items-center gap-2.5 min-w-0 pr-2">
+                            <span className={`size-2 shrink-0 rounded-full ${u.role === Role.FARMACEUTICO ? 'bg-orange-600' : (u.service === PredefinedService.FARMACIA ? 'bg-emerald-500' : u.role === Role.TECNICO ? 'bg-amber-500' : u.role === Role.DIRECTOR ? 'bg-teal-600' : 'bg-slate-500')}`}></span>
+                            <div className="truncate">
+                              <span className="truncate block font-medium">{u.name}</span>
+                              <span className="font-mono text-[10px] text-zinc-400 block">{serviceBadge} • {u.email}</span>
+                            </div>
                           </div>
-                          {currentUser.id === u.id && <span className="text-[9px] text-orange-600 dark:text-orange-400 uppercase font-bold font-mono">Activo</span>}
+                          {currentUser.id === u.id && <span className="text-[9px] text-orange-600 dark:text-orange-400 uppercase font-bold font-mono shrink-0">Activo</span>}
                         </button>
-                      ))}
-                    </div>
-                  )}
+                      );
+                    })}
+                  </div>
 
                   <div className="border-t border-zinc-100 dark:border-zinc-800 mt-2 pt-1 px-2">
                     <button

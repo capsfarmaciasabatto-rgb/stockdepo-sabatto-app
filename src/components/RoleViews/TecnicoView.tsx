@@ -15,9 +15,14 @@ import {
   Search, 
   Upload,
   Activity,
-  FileCheck2
+  FileCheck2,
+  PackageCheck,
+  PackageX,
+  AlertCircle,
+  Trash2
 } from 'lucide-react';
 import { playBeep } from '../../lib/sound';
+import { parseSpreadsheetFile, matchCatalogProduct } from '../../lib/spreadsheetParser';
 import { motion, AnimatePresence } from 'motion/react';
 
 interface TecnicoViewProps {
@@ -192,15 +197,23 @@ export default function TecnicoView({
   const [preparingOrder, setPreparingOrder] = useState<Order | null>(null);
   const [draftQuantities, setDraftQuantities] = useState<Record<string, string>>({}); // productId -> string quantity
 
-  // --- LOGICA DE PROCESAMIENTO IA DE REMITOS MUNICIPALES (PDF/IMAGEN) ---
+  // --- LOGICA DE PROCESAMIENTO IA DE REMITOS MUNICIPALES (EXCEL/CSV/PDF/IMAGEN) ---
   const [receiptItems, setReceiptItems] = useState<{
+    id?: string;
     name: string;
     presentation: string;
     quantity: number;
+    requestedQuantity?: number;
     batchCode: string;
     expirationDate: string;
     productId?: string;
+    isDelivered?: boolean;
+    selected?: boolean;
+    statusNote?: string;
+    rawId?: string;
   }[]>([]);
+  const [receiptFilter, setReceiptFilter] = useState<'all' | 'delivered' | 'undelivered'>('delivered');
+  const [receiptSearchTerm, setReceiptSearchTerm] = useState('');
   const [receiptFileName, setReceiptFileName] = useState('');
   const [isProcessingReceipt, setIsProcessingReceipt] = useState(false);
   const [receiptError, setReceiptError] = useState('');
@@ -324,6 +337,50 @@ export default function TecnicoView({
       setReceiptFileName(file.name);
       setIsProcessingReceipt(true);
 
+      const fileNameLower = file.name.toLowerCase();
+      const isSpreadsheet = 
+        fileNameLower.endsWith('.xlsx') || 
+        fileNameLower.endsWith('.xls') || 
+        fileNameLower.endsWith('.csv') || 
+        fileNameLower.endsWith('.tsv') || 
+        fileNameLower.endsWith('.txt') ||
+        file.type.includes('spreadsheet') ||
+        file.type.includes('excel') ||
+        file.type.includes('csv');
+
+      if (isSpreadsheet) {
+        const rows = await parseSpreadsheetFile(file);
+        if (rows.length === 0) {
+          throw new Error(lang === 'es' ? 'No se detectaron insumos legibles en la planilla.' : 'No readable items found in spreadsheet.');
+        }
+
+        const mappedItems = rows.map((item, idx) => {
+          const matched = matchCatalogProduct(item.rawId, item.name, item.presentation, products);
+
+          return {
+            id: `item_${Date.now()}_${idx}`,
+            name: item.name,
+            presentation: item.presentation,
+            quantity: item.quantity,
+            requestedQuantity: item.requestedQuantity,
+            batchCode: item.batchCode,
+            expirationDate: item.expirationDate,
+            productId: matched ? matched.id : undefined,
+            isDelivered: item.isDelivered,
+            selected: item.isDelivered && item.quantity > 0,
+            statusNote: item.statusNote,
+            rawId: item.rawId,
+          };
+        });
+
+        setReceiptItems(mappedItems);
+        const hasDelivered = mappedItems.some(i => i.isDelivered && i.quantity > 0);
+        setReceiptFilter(hasDelivered ? 'delivered' : 'all');
+        playBeep('success');
+        setIsProcessingReceipt(false);
+        return;
+      }
+
       const reader = new FileReader();
       reader.onload = async (evt) => {
         try {
@@ -353,34 +410,28 @@ export default function TecnicoView({
             throw new Error(lang === 'es' ? 'No se detectaron insumos legibles en el remito. Intenta con otra imagen.' : 'No readable items detected in the receipt.');
           }
 
-          // Intentar emparentar automáticamente los nombres del remito con el catálogo existente
-          const mappedItems = data.items.map((item: any) => {
-            const normName = item.name.trim().toLowerCase();
-            const normPres = item.presentation ? item.presentation.trim().toLowerCase() : '';
-            
-            let matched = products.find(
-              p => p.name.trim().toLowerCase() === normName && 
-                   p.presentation.trim().toLowerCase() === normPres
-            );
-            
-            if (!matched) {
-              matched = products.find(p => p.name.trim().toLowerCase() === normName);
-            }
-            
-            if (!matched) {
-              matched = products.find(
-                p => p.name.trim().toLowerCase().includes(normName) || 
-                     normName.includes(p.name.trim().toLowerCase())
-              );
-            }
-            
+          // Emparejar automáticamente preservando el nombre exacto del remito
+          const mappedItems = data.items.map((item: any, idx: number) => {
+            const matched = matchCatalogProduct(item.rawId, item.name, item.presentation, products);
+            const qty = Number(item.quantity) || 0;
             return {
-              ...item,
-              productId: matched ? matched.id : undefined
+              id: `item_${Date.now()}_${idx}`,
+              name: item.name,
+              presentation: item.presentation || '',
+              quantity: qty,
+              requestedQuantity: item.requestedQuantity,
+              batchCode: item.batchCode || 'MUNI',
+              expirationDate: item.expirationDate || '2027-12-31',
+              productId: matched ? matched.id : undefined,
+              isDelivered: qty > 0,
+              selected: qty > 0,
+              statusNote: item.statusNote
             };
           });
 
           setReceiptItems(mappedItems);
+          const hasDelivered = mappedItems.some(i => i.isDelivered && i.quantity > 0);
+          setReceiptFilter(hasDelivered ? 'delivered' : 'all');
           playBeep('success');
         } catch (err: any) {
           console.error(err);
@@ -405,13 +456,19 @@ export default function TecnicoView({
   };
 
   const handleConfirmReceiptImport = () => {
-    if (receiptItems.length === 0) return;
+    const itemsToImport = receiptItems.filter(item => item.selected !== false && item.quantity > 0);
+    if (itemsToImport.length === 0) {
+      setReceiptError(lang === 'es'
+        ? 'No hay insumos seleccionados con cantidad mayor a 0 para ingresar al depósito.'
+        : 'No items selected with quantity > 0 to import.');
+      return;
+    }
 
     let updatedList = [...products];
     let itemsAddedCount = 0;
     let itemsUpdatedCount = 0;
 
-    receiptItems.forEach(item => {
+    itemsToImport.forEach(item => {
       const existingProduct = item.productId
         ? updatedList.find(p => p.id === item.productId)
         : updatedList.find(
@@ -1007,12 +1064,12 @@ export default function TecnicoView({
                       {lang === 'es' ? 'Arrastra remito aquí o haz click' : 'Drag file here or click to browse'}
                     </span>
                     <span className="block text-[9px] text-zinc-400">
-                      PDF, PNG, JPG, JPEG • Máx 20MB
+                      Excel (.xlsx, .xls), CSV (.csv), PDF, PNG, JPG • Máx 20MB
                     </span>
                     <input 
                       id="receipt-file-upload-tecnico"
                       type="file"
-                      accept=".pdf,image/*"
+                      accept=".xlsx,.xls,.csv,.pdf,image/*,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,text/csv"
                       className="hidden"
                       onChange={(e) => {
                         const file = e.target.files?.[0];
@@ -1058,20 +1115,27 @@ export default function TecnicoView({
             {/* Results Preview and Confirmation Panel */}
             <div className="lg:col-span-2">
               <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-5 shadow-sm space-y-4">
-                <div className="flex items-center justify-between border-b border-zinc-100 dark:border-zinc-800 pb-2">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-zinc-100 dark:border-zinc-800 pb-3 gap-2">
                   <div className="space-y-0.5">
                     <h3 className="font-sans font-bold text-sm text-zinc-900 dark:text-zinc-50 flex items-center gap-1.5">
-                      <FileCheck2 size={15} className="text-emerald-500" />
-                      <span>{lang === 'es' ? 'Previsualización de Remito Detectado' : 'Detected delivery slip summary'}</span>
+                      <FileCheck2 size={16} className="text-emerald-500" />
+                      <span>{lang === 'es' ? 'Previsualización y Verificación de Remito' : 'Receipt Preview and Verification'}</span>
                     </h3>
                     {receiptFileName && (
-                      <p className="text-[9px] font-mono text-zinc-400">{receiptFileName}</p>
+                      <p className="text-[10px] font-mono text-zinc-400 truncate max-w-md">{receiptFileName}</p>
                     )}
                   </div>
                   {receiptItems.length > 0 && (
-                    <span className="bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-[10px] font-bold px-2 py-0.5 rounded-full font-mono">
-                      {receiptItems.length} {lang === 'es' ? 'unids' : 'items'}
-                    </span>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-[10px] font-bold px-2 py-0.5 rounded-full font-mono">
+                        {receiptItems.filter(i => (i.quantity || 0) > 0).length} {lang === 'es' ? 'con entrega' : 'delivered'}
+                      </span>
+                      {receiptItems.some(i => !i.quantity || i.quantity <= 0) && (
+                        <span className="bg-amber-500/10 text-amber-600 dark:text-amber-400 text-[10px] font-bold px-2 py-0.5 rounded-full font-mono">
+                          {receiptItems.filter(i => !i.quantity || i.quantity <= 0).length} {lang === 'es' ? 'no entregados (0 u)' : 'undelivered'}
+                        </span>
+                      )}
+                    </div>
                   )}
                 </div>
 
@@ -1082,109 +1146,370 @@ export default function TecnicoView({
                     </p>
                     <p className="text-[10px] max-w-sm mx-auto">
                       {lang === 'es' 
-                        ? 'Sube la foto o planilla en el panel lateral para iniciar el procesamiento automático utilizando el modelo Gemini.' 
-                        : 'Upload the deliveries worksheet or screenshot in the left card to parse with high fidelity.'}
+                        ? 'Sube la planilla Excel (.xlsx, .xls) o CSV en el panel lateral para iniciar la verificación automática y separación de pedidos y remitos.' 
+                        : 'Upload the deliveries spreadsheet in the left card to parse and cross-check quantities.'}
                     </p>
                   </div>
-                ) : (
-                  <div className="space-y-4">
-                    <div className="overflow-x-auto border border-zinc-100 dark:border-zinc-800 rounded-xl">
-                      <table className="w-full text-left font-sans text-[11px] border-collapse">
-                        <thead>
-                          <tr className="bg-zinc-50 dark:bg-zinc-950 text-zinc-500 font-bold border-b border-zinc-150 dark:border-zinc-800/60">
-                            <th className="py-2.5 px-3">{lang === 'es' ? 'Artículo / Fármaco' : 'Item Label'}</th>
-                            <th className="py-2.5 px-2">{lang === 'es' ? 'Presentación' : 'Presentation'}</th>
-                            <th className="py-2.5 px-2">{lang === 'es' ? 'Cant. a Ingresar' : 'Received Qty'}</th>
-                            <th className="py-2.5 px-2 font-mono">Lote</th>
-                            <th className="py-2.5 px-2 font-mono font-sans">Vto</th>
-                            <th className="py-2.5 px-3 text-right">{lang === 'es' ? 'Asociar / Emparejar con Catálogo' : 'Map with Catalog'}</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800/50">
-                          {receiptItems.map((item, idx) => {
-                            return (
-                              <tr key={idx} className="hover:bg-zinc-50/55 dark:hover:bg-zinc-950/20 transition">
-                                <td className="py-2.5 px-3 font-bold text-zinc-800 dark:text-zinc-200">
-                                  {item.name}
-                                </td>
-                                <td className="py-2.5 px-2 text-zinc-500 font-medium">
-                                  {item.presentation}
-                                </td>
-                                <td className="py-2.5 px-2 font-bold text-orange-600 font-mono">
-                                  +{item.quantity} u
-                                </td>
-                                <td className="py-2.5 px-2 font-mono font-medium text-indigo-500">
-                                  {item.batchCode}
-                                </td>
-                                <td className="py-2.5 px-2 font-mono text-zinc-400">
-                                  {item.expirationDate}
-                                </td>
-                                <td className="py-2.5 px-3 text-right">
-                                  <div className="flex flex-col gap-1 items-end">
-                                    <select
-                                      id={`receipt-item-select-${idx}`}
-                                      value={item.productId || ""}
-                                      onChange={(e) => {
-                                        const val = e.target.value;
-                                        setReceiptItems(prev => prev.map((itm, i) => i === idx ? { ...itm, productId: val || undefined } : itm));
-                                      }}
-                                      className="text-[10px] py-1 px-1.5 border border-zinc-200 dark:border-zinc-800 rounded bg-white dark:bg-zinc-900 text-zinc-800 dark:text-zinc-100 max-w-[200px] truncate focus:outline-none focus:ring-1 focus:ring-orange-500 font-sans"
-                                    >
-                                      <option value="">🆕 {lang === 'es' ? 'Crear como nuevo insumo' : 'Create as new supply'}</option>
-                                      {products.map(p => (
-                                        <option key={p.id} value={p.id}>
-                                          {p.name} ({p.presentation})
-                                        </option>
-                                      ))}
-                                    </select>
-                                    
-                                    {item.productId ? (
-                                      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[8px] font-bold bg-green-500/10 text-green-500" title="Coincide con un artículo en tu catálogo de farmacia">
-                                        <span className="size-1 bg-green-500 rounded-full"></span>
-                                        {lang === 'es' ? 'Emparejado (Suma Stock)' : 'Matched (Increments Stock)'}
-                                      </span>
-                                    ) : (
-                                      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[8px] font-bold bg-amber-500/10 text-amber-500" title="Se creará un nuevo artículo en tu catálogo con este lote">
-                                        <span className="size-1 bg-amber-500 rounded-full animate-pulse"></span>
-                                        🆕 {lang === 'es' ? 'Nuevo Insumo' : 'New Insumo'}
-                                      </span>
-                                    )}
-                                  </div>
+                ) : (() => {
+                  const deliveredCount = receiptItems.filter(i => (i.quantity || 0) > 0).length;
+                  const undeliveredCount = receiptItems.filter(i => !i.quantity || i.quantity <= 0).length;
+                  const selectedCount = receiptItems.filter(i => i.selected !== false && (i.quantity || 0) > 0).length;
+                  const totalUnits = receiptItems
+                    .filter(i => i.selected !== false && (i.quantity || 0) > 0)
+                    .reduce((sum, i) => sum + (Number(i.quantity) || 0), 0);
+
+                  const filteredItems = receiptItems.filter(item => {
+                    const isDeliv = (item.quantity || 0) > 0;
+                    if (receiptFilter === 'delivered' && !isDeliv) return false;
+                    if (receiptFilter === 'undelivered' && isDeliv) return false;
+
+                    if (receiptSearchTerm.trim()) {
+                      const q = receiptSearchTerm.toLowerCase().trim();
+                      const matchN = item.name.toLowerCase().includes(q);
+                      const matchP = item.presentation.toLowerCase().includes(q);
+                      const matchB = item.batchCode.toLowerCase().includes(q);
+                      return matchN || matchP || matchB;
+                    }
+                    return true;
+                  });
+
+                  const allFilteredSelected = filteredItems.length > 0 && filteredItems.every(i => i.selected !== false && (i.quantity || 0) > 0);
+
+                  return (
+                    <div className="space-y-3">
+                      {/* Notice Banner when Pedido vs Remito has undelivered items */}
+                      {undeliveredCount > 0 && (
+                        <div className="bg-amber-50 dark:bg-amber-950/30 border border-amber-200/80 dark:border-amber-800/50 rounded-xl p-3 flex items-start gap-2.5">
+                          <AlertCircle size={16} className="text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+                          <div className="text-[11px] text-amber-900 dark:text-amber-200 leading-relaxed">
+                            <span className="font-bold">
+                              {lang === 'es' ? 'Atención - Documento con Pedido y Remito Municipal:' : 'Municipal Order vs Delivery Slip detected:'}
+                            </span>{' '}
+                            {lang === 'es'
+                              ? `Se detectaron ${deliveredCount} insumos con entrega efectiva y ${undeliveredCount} insumos que figuran en el pedido municipal pero con 0 unidades remitidas por el depósito. Los no entregados se desmarcaron automáticamente para no inflar tu stock.`
+                              : `Found ${deliveredCount} delivered items and ${undeliveredCount} requested items that were not delivered (0 units). Undelivered items have been excluded from import.`}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Navigation tabs & search filter */}
+                      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 pt-1">
+                        <div className="flex items-center gap-1.5 p-1 bg-zinc-100 dark:bg-zinc-800/70 rounded-xl">
+                          <button
+                            type="button"
+                            onClick={() => setReceiptFilter('delivered')}
+                            className={`px-3 py-1 text-[11px] font-bold rounded-lg transition cursor-pointer flex items-center gap-1.5 ${
+                              receiptFilter === 'delivered'
+                                ? 'bg-white dark:bg-zinc-900 text-emerald-600 dark:text-emerald-400 shadow-xs'
+                                : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-200'
+                            }`}
+                          >
+                            <PackageCheck size={13} />
+                            <span>{lang === 'es' ? 'A Ingresar al Stock' : 'To Import'} ({deliveredCount})</span>
+                          </button>
+
+                          {undeliveredCount > 0 && (
+                            <button
+                              type="button"
+                              onClick={() => setReceiptFilter('undelivered')}
+                              className={`px-3 py-1 text-[11px] font-bold rounded-lg transition cursor-pointer flex items-center gap-1.5 ${
+                                receiptFilter === 'undelivered'
+                                  ? 'bg-white dark:bg-zinc-900 text-amber-600 dark:text-amber-400 shadow-xs'
+                                  : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-200'
+                              }`}
+                            >
+                              <PackageX size={13} />
+                              <span>{lang === 'es' ? 'No Entregados / Pedido Muni' : 'Undelivered'} ({undeliveredCount})</span>
+                            </button>
+                          )}
+
+                          <button
+                            type="button"
+                            onClick={() => setReceiptFilter('all')}
+                            className={`px-3 py-1 text-[11px] font-bold rounded-lg transition cursor-pointer ${
+                              receiptFilter === 'all'
+                                ? 'bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100 shadow-xs'
+                                : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-200'
+                            }`}
+                          >
+                            <span>{lang === 'es' ? 'Todos' : 'All'} ({receiptItems.length})</span>
+                          </button>
+                        </div>
+
+                        {/* Search in receipt */}
+                        <div className="relative w-full sm:w-56">
+                          <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-zinc-400" />
+                          <input
+                            type="text"
+                            value={receiptSearchTerm}
+                            onChange={(e) => setReceiptSearchTerm(e.target.value)}
+                            placeholder={lang === 'es' ? 'Buscar medicamento...' : 'Search item...'}
+                            className="w-full text-[11px] pl-7 pr-2.5 py-1 bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-lg focus:outline-none focus:ring-1 focus:ring-emerald-500 font-sans"
+                          />
+                        </div>
+                      </div>
+
+                      {/* Items Table */}
+                      <div className="overflow-x-auto border border-zinc-150 dark:border-zinc-800 rounded-xl">
+                        <table className="w-full text-left font-sans text-[11px] border-collapse">
+                          <thead>
+                            <tr className="bg-zinc-50 dark:bg-zinc-950 text-zinc-600 dark:text-zinc-400 font-bold border-b border-zinc-200 dark:border-zinc-800 text-[10px] uppercase tracking-wider">
+                              <th className="py-2.5 px-3 w-8 text-center">
+                                <input
+                                  type="checkbox"
+                                  checked={allFilteredSelected}
+                                  onChange={(e) => {
+                                    const checked = e.target.checked;
+                                    setReceiptItems(prev => prev.map(item => {
+                                      const matches = filteredItems.includes(item);
+                                      if (matches) {
+                                        return { ...item, selected: checked && (item.quantity || 0) > 0 };
+                                      }
+                                      return item;
+                                    }));
+                                  }}
+                                  title={lang === 'es' ? 'Seleccionar / Deseleccionar visibles' : 'Toggle visible'}
+                                  className="rounded border-zinc-300 text-emerald-600 focus:ring-emerald-500 cursor-pointer"
+                                />
+                              </th>
+                              <th className="py-2.5 px-2">{lang === 'es' ? 'Medicamento / Insumo' : 'Product Label'}</th>
+                              <th className="py-2.5 px-2">{lang === 'es' ? 'Presentación' : 'Presentation'}</th>
+                              <th className="py-2.5 px-2 text-center">{lang === 'es' ? 'Cant. Remitida' : 'Qty'}</th>
+                              <th className="py-2.5 px-2">{lang === 'es' ? 'Lote' : 'Batch'}</th>
+                              <th className="py-2.5 px-2">{lang === 'es' ? 'Vencimiento' : 'Expiry'}</th>
+                              <th className="py-2.5 px-2">{lang === 'es' ? 'Asociar Catálogo' : 'Catalog Match'}</th>
+                              <th className="py-2.5 px-2 text-center w-10"></th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800/60">
+                            {filteredItems.length === 0 ? (
+                              <tr>
+                                <td colSpan={8} className="py-8 text-center text-zinc-400 text-xs">
+                                  {lang === 'es' ? 'No se encontraron insumos con este filtro.' : 'No items match this filter.'}
                                 </td>
                               </tr>
-                            );
-                          })}
-                        </tbody>
-                      </table>
-                    </div>
+                            ) : (
+                              filteredItems.map((item) => {
+                                const realIdx = receiptItems.indexOf(item);
+                                const isDeliv = (item.quantity || 0) > 0;
+                                const isChecked = item.selected !== false && isDeliv;
 
-                    <div className="flex flex-col sm:flex-row justify-between items-center bg-zinc-50 dark:bg-zinc-950/40 p-3 rounded-xl border border-zinc-150/40 dark:border-zinc-850 gap-3">
-                      <div className="text-[10px] text-zinc-500">
-                        {lang === 'es' 
-                          ? 'Al presionar "Ingresar Stock", los insumos señalados como "Existente" añadirán esta tanda de lote y cantidad bajo el estándar FEFO. Los insumos "Nuevos" se agregarán al catálogo automáticamente.' 
-                          : 'Validating and committing imports merges quantities and batch profiles keeping FEFO logs aligned.'}
+                                return (
+                                  <tr 
+                                    key={realIdx} 
+                                    className={`transition ${
+                                      !isDeliv 
+                                        ? 'bg-amber-500/5 dark:bg-amber-500/5 opacity-80' 
+                                        : isChecked 
+                                          ? 'hover:bg-emerald-500/5 dark:hover:bg-emerald-500/5' 
+                                          : 'hover:bg-zinc-50 dark:hover:bg-zinc-950/20 opacity-60'
+                                    }`}
+                                  >
+                                    {/* Select Checkbox */}
+                                    <td className="py-2 px-3 text-center">
+                                      <input
+                                        type="checkbox"
+                                        checked={isChecked}
+                                        disabled={!isDeliv}
+                                        onChange={(e) => {
+                                          const checked = e.target.checked;
+                                          setReceiptItems(prev => prev.map((itm, i) => i === realIdx ? { ...itm, selected: checked } : itm));
+                                        }}
+                                        className="rounded border-zinc-300 text-emerald-600 focus:ring-emerald-500 cursor-pointer disabled:opacity-30"
+                                      />
+                                    </td>
+
+                                    {/* Medication Name */}
+                                    <td className="py-2 px-2">
+                                      <div className="space-y-0.5 max-w-xs">
+                                        <div className="flex items-center gap-1.5 flex-wrap">
+                                          <span className="font-bold text-zinc-900 dark:text-zinc-100">
+                                            {item.name}
+                                          </span>
+                                          <span className="px-1.5 py-0.2 rounded text-[8px] font-mono font-bold bg-emerald-100 dark:bg-emerald-900/60 text-emerald-700 dark:text-emerald-300">
+                                            🏙️ Muni
+                                          </span>
+                                        </div>
+
+                                        {item.statusNote && (
+                                          <p className="text-[9px] text-amber-600 dark:text-amber-400 font-medium">
+                                            {item.statusNote}
+                                          </p>
+                                        )}
+                                      </div>
+                                    </td>
+
+                                    {/* Presentation */}
+                                    <td className="py-2 px-2 text-zinc-600 dark:text-zinc-400 text-[10px]">
+                                      {item.presentation || '—'}
+                                    </td>
+
+                                    {/* Quantity */}
+                                    <td className="py-2 px-2 text-center">
+                                      <div className="inline-flex flex-col items-center">
+                                        <div className="flex items-center gap-1">
+                                          <input
+                                            type="number"
+                                            min="0"
+                                            value={item.quantity}
+                                            onChange={(e) => {
+                                              const val = Math.max(0, parseInt(e.target.value) || 0);
+                                              setReceiptItems(prev => prev.map((itm, i) => 
+                                                i === realIdx 
+                                                  ? { ...itm, quantity: val, isDelivered: val > 0, selected: val > 0 } 
+                                                  : itm
+                                              ));
+                                            }}
+                                            className={`w-16 px-1.5 py-0.5 text-center text-xs font-mono font-bold border rounded focus:outline-none ${
+                                              isDeliv
+                                                ? 'border-emerald-300 dark:border-emerald-700 bg-white dark:bg-zinc-900 text-emerald-600 dark:text-emerald-400 focus:ring-1 focus:ring-emerald-500'
+                                                : 'border-zinc-300 dark:border-zinc-700 bg-zinc-100 dark:bg-zinc-800 text-zinc-400'
+                                            }`}
+                                          />
+                                          <span className="text-[9px] font-mono text-zinc-400">u</span>
+                                        </div>
+
+                                        {/* Cross-check with requested Muni quantity */}
+                                        {item.requestedQuantity !== undefined && item.requestedQuantity > 0 && (
+                                          <div className="text-[9px] font-mono mt-0.5 whitespace-nowrap">
+                                            <span className="text-zinc-400">Ped: {item.requestedQuantity} u</span>
+                                            {item.quantity < item.requestedQuantity ? (
+                                              <span className="text-red-500 font-bold ml-1">
+                                                (Falta {item.requestedQuantity - item.quantity})
+                                              </span>
+                                            ) : item.quantity > item.requestedQuantity ? (
+                                              <span className="text-blue-500 font-bold ml-1">
+                                                (+{item.quantity - item.requestedQuantity})
+                                              </span>
+                                            ) : (
+                                              <span className="text-emerald-600 font-medium ml-1">✓</span>
+                                            )}
+                                          </div>
+                                        )}
+                                      </div>
+                                    </td>
+
+                                    {/* Batch */}
+                                    <td className="py-2 px-2">
+                                      <input
+                                        type="text"
+                                        value={item.batchCode}
+                                        onChange={(e) => {
+                                          const val = e.target.value.toUpperCase();
+                                          setReceiptItems(prev => prev.map((itm, i) => i === realIdx ? { ...itm, batchCode: val } : itm));
+                                        }}
+                                        placeholder="LOTE"
+                                        className="w-24 px-1.5 py-0.5 text-[10px] font-mono border border-zinc-200 dark:border-zinc-800 rounded bg-white dark:bg-zinc-900 text-indigo-600 dark:text-indigo-400 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                                      />
+                                    </td>
+
+                                    {/* Expiration */}
+                                    <td className="py-2 px-2">
+                                      <input
+                                        type="text"
+                                        value={item.expirationDate}
+                                        onChange={(e) => {
+                                          const val = e.target.value;
+                                          setReceiptItems(prev => prev.map((itm, i) => i === realIdx ? { ...itm, expirationDate: val } : itm));
+                                        }}
+                                        placeholder="YYYY-MM-DD"
+                                        className="w-24 px-1.5 py-0.5 text-[10px] font-mono border border-zinc-200 dark:border-zinc-800 rounded bg-white dark:bg-zinc-900 text-zinc-600 dark:text-zinc-400 focus:outline-none focus:ring-1 focus:ring-zinc-500"
+                                      />
+                                    </td>
+
+                                    {/* Catalog Match Selector */}
+                                    <td className="py-2 px-2">
+                                      <div className="flex flex-col gap-0.5 max-w-[190px]">
+                                        <select
+                                          value={item.productId || ""}
+                                          onChange={(e) => {
+                                            const val = e.target.value;
+                                            setReceiptItems(prev => prev.map((itm, i) => i === realIdx ? { ...itm, productId: val || undefined } : itm));
+                                          }}
+                                          className="text-[10px] py-1 px-1.5 border border-zinc-200 dark:border-zinc-800 rounded bg-white dark:bg-zinc-900 text-zinc-800 dark:text-zinc-100 truncate focus:outline-none focus:ring-1 focus:ring-emerald-500 font-sans"
+                                        >
+                                          <option value="">🆕 {lang === 'es' ? 'Crear como nuevo insumo' : 'Create as new supply'}</option>
+                                          {products.map(p => (
+                                            <option key={p.id} value={p.id}>
+                                              {p.name} ({p.presentation})
+                                            </option>
+                                          ))}
+                                        </select>
+                                        
+                                        {item.productId ? (
+                                          <span className="inline-flex items-center gap-1 text-[8px] font-bold text-emerald-600 dark:text-emerald-400">
+                                            <span className="size-1 bg-emerald-500 rounded-full"></span>
+                                            {lang === 'es' ? 'Emparejado con catálogo' : 'Catalog match'}
+                                          </span>
+                                        ) : (
+                                          <span className="inline-flex items-center gap-1 text-[8px] font-bold text-amber-600 dark:text-amber-400">
+                                            <span className="size-1 bg-amber-500 rounded-full"></span>
+                                            🆕 {lang === 'es' ? 'Nuevo insumo' : 'New supply'}
+                                          </span>
+                                        )}
+                                      </div>
+                                    </td>
+
+                                    {/* Remove row */}
+                                    <td className="py-2 px-2 text-center">
+                                      <button
+                                        type="button"
+                                        onClick={() => setReceiptItems(prev => prev.filter((_, i) => i !== realIdx))}
+                                        className="p-1 text-zinc-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-950/40 rounded transition cursor-pointer"
+                                        title={lang === 'es' ? 'Quitar fila del remito' : 'Remove row'}
+                                      >
+                                        <Trash2 size={13} />
+                                      </button>
+                                    </td>
+                                  </tr>
+                                );
+                              })
+                            )}
+                          </tbody>
+                        </table>
                       </div>
 
-                      <div className="flex gap-2 shrink-0">
-                        <button
-                          type="button"
-                          onClick={() => { setReceiptItems([]); setReceiptFileName(''); }}
-                          className="py-2 px-3 hover:bg-zinc-150 dark:hover:bg-zinc-800 text-zinc-500 font-bold font-sans rounded-xl cursor-pointer"
-                        >
-                          {lang === 'es' ? 'Limpiar' : 'Discard'}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={handleConfirmReceiptImport}
-                          className="py-2 px-4 bg-emerald-600 hover:bg-emerald-700 text-white font-bold font-sans rounded-xl shadow-md cursor-pointer flex items-center gap-1.5 transition"
-                        >
-                          <FileCheck2 size={14} />
-                          <span>{lang === 'es' ? 'Ingresar Stock a Depósito' : 'Import Stock now'}</span>
-                        </button>
+                      {/* Confirmation and Action footer */}
+                      <div className="flex flex-col sm:flex-row justify-between items-center bg-zinc-50 dark:bg-zinc-950/40 p-3.5 rounded-xl border border-zinc-150/60 dark:border-zinc-800 gap-3">
+                        <div className="text-[10px] text-zinc-500 space-y-0.5">
+                          <p className="font-medium">
+                            {lang === 'es' 
+                              ? `Se ingresarán ${selectedCount} insumos seleccionados (${totalUnits} unidades físicas). Lotes registrados bajo estándar FEFO.` 
+                              : `Ready to commit ${selectedCount} selected items (${totalUnits} physical units) with FEFO tracking.`}
+                          </p>
+                          {undeliveredCount > 0 && (
+                            <p className="text-amber-600 dark:text-amber-400">
+                              ℹ️ {undeliveredCount} insumos con 0 u no afectarán el stock de farmacia.
+                            </p>
+                          )}
+                        </div>
+
+                        <div className="flex gap-2 shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => { setReceiptItems([]); setReceiptFileName(''); }}
+                            className="py-2 px-3 hover:bg-zinc-200/60 dark:hover:bg-zinc-800 text-zinc-600 dark:text-zinc-400 font-bold font-sans rounded-xl cursor-pointer text-xs"
+                          >
+                            {lang === 'es' ? 'Descartar' : 'Discard'}
+                          </button>
+                          <button
+                            type="button"
+                            disabled={selectedCount === 0}
+                            onClick={handleConfirmReceiptImport}
+                            className="py-2 px-4 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-bold font-sans rounded-xl shadow-sm cursor-pointer flex items-center gap-1.5 transition text-xs"
+                          >
+                            <FileCheck2 size={15} />
+                            <span>
+                              {lang === 'es' 
+                                ? `Ingresar Stock (${selectedCount} insumos / +${totalUnits} u)` 
+                                : `Import Stock (${selectedCount} items)`}
+                            </span>
+                          </button>
+                        </div>
                       </div>
                     </div>
-                  </div>
-                )}
+                  );
+                })()}
               </div>
             </div>
 

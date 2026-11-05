@@ -15,7 +15,7 @@ import {
   PredefinedService, 
   ServiceConfiguration,
   StockBatch,
-  normalizeServiceName 
+  MedicationOrigin
 } from '../../types';
 import { runIntegrationTests, TestResult } from '../../lib/testRunner';
 import { 
@@ -46,9 +46,18 @@ import {
   ChevronDown,
   Search,
   SlidersHorizontal,
-  User as UserIcon
+  Landmark,
+  Building2,
+  User as UserIcon,
+  AlertCircle,
+  Info,
+  PackageCheck,
+  PackageX,
+  Check
 } from 'lucide-react';
 import { playBeep } from '../../lib/sound';
+import { parseSpreadsheetFile, downloadRemitoTemplate, matchCatalogProduct } from '../../lib/spreadsheetParser';
+import * as XLSX from 'xlsx';
 
 interface FarmaceuticoViewProps {
   currentUser: User;
@@ -85,10 +94,12 @@ export default function FarmaceuticoView({
   simulateLastBusinessDay = false,
   onToggleSimulateLastBusinessDay
 }: FarmaceuticoViewProps) {
-  const [subTab, setSubTab] = useState<'catalog' | 'mapping' | 'adjust' | 'users' | 'reports' | 'receipt' | 'history_deliveries' | 'monthly_discard'>('catalog');
+  const [subTab, setSubTab] = useState<'catalog' | 'mapping' | 'adjust' | 'users' | 'reports' | 'receipt' | 'history_deliveries' | 'monthly_discard' | 'mb_stock'>('catalog');
+  const [receiptOrigin, setReceiptOrigin] = useState<'Muni' | 'MB'>('MB');
+  const [mbSearchQuery, setMbSearchQuery] = useState('');
+  const [mbFilterStatus, setMbFilterStatus] = useState<'All' | 'Optimo' | 'Alerta' | 'Critico' | 'Vencido'>('All');
   const [reportType, setReportType] = useState<'consumption' | 'movements' | 'audit' | 'expiring' | 'low_stock' | 'tests' | 'unsatisfied'>('consumption');
   const [consumptionSearch, setConsumptionSearch] = useState('');
-  const [consumptionServiceFilter, setConsumptionServiceFilter] = useState<string>('ALL');
   const [semaforoFilter, setSemaforoFilter] = useState<'All' | 'Rojo' | 'Amarillo' | 'Verde' | 'Vencido'>('All');
 
   // Estados para consulta de historial de entregas
@@ -109,15 +120,23 @@ export default function FarmaceuticoView({
 
   const t = translations[lang];
 
-  // --- LOGICA DE PROCESAMIENTO IA DE REMITOS MUNICIPALES (PDF/IMAGEN) ---
+  // --- LOGICA DE PROCESAMIENTO IA DE REMITOS MUNICIPALES (PDF/IMAGEN/EXCEL) ---
   const [receiptItems, setReceiptItems] = useState<{
+    id?: string;
     name: string;
     presentation: string;
     quantity: number;
+    requestedQuantity?: number;
     batchCode: string;
     expirationDate: string;
     productId?: string;
+    isDelivered?: boolean;
+    selected?: boolean;
+    statusNote?: string;
+    rawId?: string;
   }[]>([]);
+  const [receiptFilter, setReceiptFilter] = useState<'all' | 'delivered' | 'undelivered'>('delivered');
+  const [receiptSearchTerm, setReceiptSearchTerm] = useState('');
   const [receiptFileName, setReceiptFileName] = useState('');
   const [isProcessingReceipt, setIsProcessingReceipt] = useState(false);
   const [receiptError, setReceiptError] = useState('');
@@ -191,7 +210,10 @@ export default function FarmaceuticoView({
     
     // Si no había nombre de archivo de remito, le ponemos uno general para indicar que hay carga manual
     if (!receiptFileName) {
-      setReceiptFileName(lang === 'es' ? 'Remito cargado a mano' : 'Manually entered receipt');
+      setReceiptFileName(receiptOrigin === 'MB' 
+        ? (lang === 'es' ? 'Remito Manual Medicamentos Bonaerenses' : 'Manual MB Receipt') 
+        : (lang === 'es' ? 'Remito Manual Municipal' : 'Manual Municipal Receipt')
+      );
     }
 
     // Resetear campos
@@ -207,11 +229,11 @@ export default function FarmaceuticoView({
   };
 
   const handleDownloadCSVTemplate = () => {
-    // Generar cabeceras y ejemplos en español de acuerdo al catálogo
+    // Generar cabeceras y ejemplos en español de acuerdo al catálogo municipal
     const headers = ['ID_CATALOGO', 'INSUMO_NOMBRE', 'PRESENTACION', 'CANTIDAD', 'LOTE', 'VENCIMIENTO_YYYY_MM_DD'].join(',');
     const row1 = 'g3,Dipirona 1g (Metamizol),Ampolla 2 ml,150,L-DP012,2027-02-15';
     const row2 = 'g2,Furosemida 20 mg,Ampolla 2 ml,100,L-FS993,2026-11-30';
-    const row3 = ',Algodon Hidrofilo,Pote 100g,50,L-AL02,2028-05-10'; // nuevo
+    const row3 = ',Algodon Hidrofilo,Pote 100g,50,L-AL02,2028-05-10';
     
     const csvContent = '\uFEFF' + [headers, row1, row2, row3].join('\n'); // Add UTF-8 BOM
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
@@ -219,6 +241,89 @@ export default function FarmaceuticoView({
     const link = document.createElement('a');
     link.setAttribute('href', url);
     link.setAttribute('download', 'plantilla_remito_municipal.csv');
+    link.style.visibility = 'hidden';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    playBeep('beep');
+  };
+
+  const handleDownloadMBTemplate = () => {
+    // Generar cabeceras y ejemplos en español específicos para Medicamentos Bonaerenses (MB)
+    const headers = ['ID_CATALOGO', 'INSUMO_NOMBRE', 'PRESENTACION', 'CANTIDAD', 'LOTE', 'VENCIMIENTO_YYYY_MM_DD'].join(',');
+    const row1 = 'mb-1,Amoxicilina 500 mg,Comprimidos x 16,120,L-MB-AMO04,2026-12-31';
+    const row2 = 'mb-2,Ibuprofeno 400 mg,Comprimidos x 20,200,L-MB-IBU11,2027-04-30';
+    const row3 = 'mb-3,Paracetamol 500 mg,Comprimidos x 20,150,L-MB-PAR08,2026-10-15';
+    const row4 = 'mb-4,Salbutamol 100 mcg,Aerosol 200 dosis,80,L-MB-SAL99,2027-08-31';
+    const row5 = ',Enalapril 10 mg,Comprimidos x 30,100,L-MB-ENAL01,2027-06-30';
+    
+    const csvContent = '\uFEFF' + [headers, row1, row2, row3, row4, row5].join('\n'); // Add UTF-8 BOM
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.setAttribute('href', url);
+    link.setAttribute('download', 'plantilla_remito_medicamentos_bonaerenses_MB.csv');
+    link.style.visibility = 'hidden';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    playBeep('beep');
+  };
+
+  const handleExportMBStockReport = () => {
+    const headers = [
+      'PROGRAMA',
+      'ID_INSUMO',
+      'MEDICAMENTO',
+      'PRESENTACION',
+      'LOTE',
+      'REMITO_ORIGEN',
+      'STOCK_UNIDADES',
+      'FECHA_VENCIMIENTO',
+      'DIAS_RESTANTES',
+      'ESTADO_VENCIMIENTO',
+      'CLIENTE_AUTORIZADO'
+    ].join(',');
+
+    const rows: string[] = [];
+    const today = new Date();
+
+    const mbProductsList = products.filter(
+      p => p.programOrigin === 'MB' || p.batches.some(b => b.origin === 'MB')
+    );
+
+    mbProductsList.forEach(p => {
+      const mbBatches = p.batches.filter(b => b.origin === 'MB' || (!b.origin && p.programOrigin === 'MB'));
+      mbBatches.forEach(b => {
+        const expDate = new Date(b.expirationDate);
+        const diffDays = Math.ceil((expDate.getTime() - today.getTime()) / (1000 * 3600 * 24));
+        let estado = 'Óptimo (>180d)';
+        if (diffDays < 0) estado = 'Vencido';
+        else if (diffDays <= 60) estado = 'Crítico (<60d)';
+        else if (diffDays <= 180) estado = 'Alerta (60-180d)';
+
+        rows.push([
+          'Medicamentos Bonaerenses (MB)',
+          `"${p.id}"`,
+          `"${p.name.replace(/"/g, '""')}"`,
+          `"${p.presentation.replace(/"/g, '""')}"`,
+          `"${b.batchCode}"`,
+          `"${b.receiptNumber || 'N/D'}"`,
+          b.quantity,
+          b.expirationDate,
+          diffDays,
+          `"${estado}"`,
+          'Farmacia Dispensa'
+        ].join(','));
+      });
+    });
+
+    const csvContent = '\uFEFF' + [headers, ...rows].join('\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.setAttribute('href', url);
+    link.setAttribute('download', `reporte_stock_vencimientos_MB_${new Date().toISOString().split('T')[0]}.csv`);
     link.style.visibility = 'hidden';
     document.body.appendChild(link);
     link.click();
@@ -234,255 +339,79 @@ export default function FarmaceuticoView({
       setReceiptFileName(file.name);
       setIsProcessingReceipt(true);
 
-      const isCSV = file.name.endsWith('.csv') || file.type === 'text/csv';
+      const fileNameLower = file.name.toLowerCase();
+      const isSpreadsheet = 
+        fileNameLower.endsWith('.xlsx') || 
+        fileNameLower.endsWith('.xls') || 
+        fileNameLower.endsWith('.csv') || 
+        fileNameLower.endsWith('.tsv') || 
+        fileNameLower.endsWith('.txt') ||
+        file.type.includes('spreadsheet') ||
+        file.type.includes('excel') ||
+        file.type.includes('csv');
 
-      if (!isCSV) {
+      if (!isSpreadsheet) {
         throw new Error(lang === 'es'
-          ? 'Para cargar remitos de forma gratuita y local, por favor utiliza un archivo planilla tipo .csv. Si tienes una imagen del remito impreso o en PDF, puedes cargarlo digitando los insumos manualmente en el panel de abajo.'
-          : 'To upload sheets for free and locally, please use a .csv spreadsheet file. If you have an image or printed sheet, use the manual entry panel below.');
+          ? 'Formato no compatible. Por favor sube un archivo Excel (.xlsx, .xls) o CSV (.csv).'
+          : 'Unsupported format. Please upload an Excel (.xlsx, .xls) or CSV (.csv) file.');
       }
 
-      if (isCSV) {
-        // --- Procesamiento de CSV totalmente local y gratuito ---
-        const reader = new FileReader();
-        reader.onload = async (evt) => {
-          try {
-            const text = evt.target?.result as string;
-            if (!text) {
-              throw new Error(lang === 'es' ? 'El archivo CSV está vacío o no se puede leer.' : 'The CSV file is empty or unreadable.');
-            }
+      const parsedRows = await parseSpreadsheetFile(file);
 
-            const lines = text.split(/\r?\n/);
-            if (lines.length === 0) {
-              throw new Error(lang === 'es' ? 'El archivo CSV no contiene filas.' : 'The CSV file has no rows.');
-            }
-
-            // Determinar separador (usualmente o coma o punto y coma por Excel en Español)
-            const firstLine = lines[0];
-            const sep = firstLine.includes(';') ? ';' : ',';
-
-            const rawHeaders = firstLine.split(sep).map(h => h.trim().replace(/^["']|["']$/g, '').toLowerCase());
-
-            // Determinar si la primera línea contiene cabeceras
-            const hasHeaders = rawHeaders.some(h => 
-              h === 'id' || h.includes('name') || h.includes('producto') || h.includes('insumo') || 
-              h.includes('present') || h.includes('cant') || h.includes('qty') || h.includes('lote') || 
-              h.includes('venc') || h.includes('exp') || h.includes('vto') || h.includes('articulo') || 
-              h.includes('artículo') || h.includes('nombre')
-            );
-
-            let startIndex = 0;
-            let colId = -1;
-            let colName = -1;
-            let colPres = -1;
-            let colQty = -1;
-            let colBatch = -1;
-            let colExpir = -1;
-
-            if (hasHeaders) {
-              startIndex = 1;
-              rawHeaders.forEach((h, idx) => {
-                const cleanH = h.trim().toLowerCase();
-                
-                // Id o Código del catálogo
-                if (cleanH === 'id' || cleanH === 'código' || cleanH === 'codigo' || cleanH.includes('id_cata') || cleanH.includes('productid') || cleanH.startsWith('id_') || cleanH.endsWith('_id')) {
-                  colId = idx;
-                }
-                else if (
-                  cleanH.includes('insumo') || 
-                  cleanH.includes('producto') || 
-                  cleanH.includes('articulo') || 
-                  cleanH.includes('artículo') || 
-                  cleanH.includes('nombre') || 
-                  cleanH.includes('name') || 
-                  cleanH.includes('fármaco') || 
-                  cleanH.includes('farmaco') ||
-                  cleanH.includes('medicamento') ||
-                  cleanH.includes('droga')
-                ) {
-                  colName = idx;
-                }
-                else if (cleanH.includes('presenta') || cleanH.includes('formato') || cleanH.includes('envase')) {
-                  colPres = idx;
-                }
-                else if (cleanH.includes('cant') || cleanH.includes('qty') || cleanH.includes('unidad') || cleanH.includes('unid') || cleanH.includes('cantidad')) {
-                  colQty = idx;
-                }
-                else if (cleanH === 'lote' || cleanH === 'batch') {
-                  colBatch = idx;
-                }
-                else if (cleanH.includes('partida') && colBatch === -1) {
-                  colBatch = idx;
-                }
-                else if (cleanH.includes('venc') || cleanH.includes('exp') || cleanH.includes('fecha') || cleanH === 'vto' || cleanH.includes('vto')) {
-                  colExpir = idx;
-                }
-              });
-            }
-
-            // Fallbacks si no se detectaron automáticamente las cabeceras básicas
-            if (colId === -1 && colName === -1 && colQty === -1) {
-              colId = 0;
-              colName = 1;
-              colPres = 2;
-              colQty = 3;
-              colBatch = 4;
-              colExpir = 5;
-            }
-
-            const parsedItems: any[] = [];
-
-            for (let i = startIndex; i < lines.length; i++) {
-              const line = lines[i].trim();
-              if (!line) continue;
-
-              const cells = line.split(sep).map(c => c.trim().replace(/^["']|["']$/g, ''));
-              if (cells.length < 2) continue;
-
-              const cellId = colId !== -1 && colId < cells.length ? cells[colId] : '';
-              const cellName = colName !== -1 && colName < cells.length ? cells[colName] : '';
-              const cellPres = colPres !== -1 && colPres < cells.length ? cells[colPres] : '';
-              const cellQtyRaw = colQty !== -1 && colQty < cells.length ? cells[colQty] : '1';
-              const cellBatch = colBatch !== -1 && colBatch < cells.length ? cells[colBatch] : 'L-MANUAL';
-              let cellExpir = colExpir !== -1 && colExpir < cells.length ? cells[colExpir] : '';
-
-              const quantity = Math.max(1, parseInt(cellQtyRaw) || 1);
-              const batchCode = (cellBatch || 'L-MANUAL').toUpperCase();
-
-              // Intentar sanear fechas (Argentina suele usar DD/MM/YYYY o DD-MM-YYYY)
-              if (cellExpir) {
-                if (cellExpir.includes('/')) {
-                  const parts = cellExpir.split('/');
-                  if (parts.length === 3) {
-                    const p0 = parts[0].trim();
-                    const p1 = parts[1].trim();
-                    const p2 = parts[2].trim();
-                    if (p0.length === 4) { // YYYY/MM/DD
-                      cellExpir = `${p0}-${p1.padStart(2, '0')}-${p2.padStart(2, '0')}`;
-                    } else if (p2.length === 4) { // DD/MM/YYYY
-                      cellExpir = `${p2}-${p1.padStart(2, '0')}-${p0.padStart(2, '0')}`;
-                    }
-                  }
-                } else if (cellExpir.includes('-')) {
-                  const parts = cellExpir.split('-');
-                  if (parts.length === 3) {
-                    const p0 = parts[0].trim();
-                    const p1 = parts[1].trim();
-                    const p2 = parts[2].trim();
-                    if (p2.length === 4) { // DD-MM-YYYY
-                      cellExpir = `${p2}-${p1.padStart(2, '0')}-${p0.padStart(2, '0')}`;
-                    } else if (p0.length === 4) { // YYYY-MM-DD
-                      cellExpir = `${p0}-${p1.padStart(2, '0')}-${p2.padStart(2, '0')}`;
-                    }
-                  }
-                }
-              }
-
-              if (!cellExpir || isNaN(Date.parse(cellExpir))) {
-                const oneYearFromNow = new Date();
-                oneYearFromNow.setFullYear(oneYearFromNow.getFullYear() + 1);
-                cellExpir = oneYearFromNow.toISOString().split('T')[0];
-              }
-
-              // Intentar buscar match inteligente de catálogo para asociar automáticamente
-              let matchedProduct: Product | undefined = undefined;
-
-              if (cellId && cellId.trim()) {
-                matchedProduct = products.find(p => p.id.toLowerCase() === cellId.toLowerCase().trim());
-              }
-
-              if (!matchedProduct && cellName && cellName.trim()) {
-                const normCSVName = cellName.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
-                const csvWords = normCSVName.split(/[\s,/\-()]+/g).filter(w => w.length > 0);
-                
-                if (csvWords.length > 0) {
-                  let bestMatch: Product | undefined = undefined;
-                  let maxScore = 0;
-                  const csvNumbers: string[] = normCSVName.match(/\d+/g) || [];
-
-                  for (const p of products) {
-                    const normPName = p.name.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
-                    const pWords = normPName.split(/[\s,/\-()]+/g).filter(w => w.length > 0);
-                    
-                    // El primer término (droga principal) debe ser compatible
-                    const firstCSVWord = csvWords[0];
-                    if (!pWords.some(pw => pw.includes(firstCSVWord) || firstCSVWord.includes(pw))) {
-                      continue;
-                    }
-                    
-                    // Contar coincidencias
-                    let matches = 0;
-                    csvWords.forEach(cw => {
-                      if (pWords.some(pw => pw.includes(cw) || cw.includes(pw))) {
-                        matches++;
-                      }
-                    });
-                    
-                    const score = matches / Math.max(csvWords.length, pWords.length);
-                    const pNumbers: string[] = normPName.match(/\d+/g) || [];
-                    const numbersMatch = pNumbers.length === 0 || csvNumbers.length === 0 || 
-                                         csvNumbers.some(n => pNumbers.includes(n)) || 
-                                         pNumbers.some(n => csvNumbers.includes(n));
-                    
-                    if (numbersMatch && score > maxScore) {
-                      maxScore = score;
-                      bestMatch = p;
-                    }
-                  }
-
-                  if (maxScore > 0.25) {
-                    matchedProduct = bestMatch;
-                  }
-                }
-              }
-
-              parsedItems.push({
-                name: matchedProduct ? matchedProduct.name : (cellName || cellId || (lang === 'es' ? 'Insumo sin nombre' : 'Unnamed item')),
-                presentation: matchedProduct ? matchedProduct.presentation : (cellPres || (lang === 'es' ? 'Sin especificación' : 'No presentation')),
-                quantity,
-                batchCode,
-                expirationDate: cellExpir,
-                productId: matchedProduct ? matchedProduct.id : undefined
-              });
-            }
-
-            if (parsedItems.length === 0) {
-              throw new Error(lang === 'es' ? 'No se encontraron insumos legibles en el CSV.' : 'No readable items found in the CSV.');
-            }
-
-            setReceiptItems(parsedItems);
-            playBeep('success');
-          } catch (err: any) {
-            console.error(err);
-            setReceiptError(err.message || 'Error parsing CSV file.');
-          } finally {
-            setIsProcessingReceipt(false);
-          }
-        };
-
-        reader.onerror = () => {
-          setReceiptError(lang === 'es' ? 'Fallo al leer el archivo CSV.' : 'Failed to read CSV file.');
-          setIsProcessingReceipt(false);
-        };
-
-        reader.readAsText(file);
+      if (parsedRows.length === 0) {
+        throw new Error(lang === "es"
+          ? "No se encontraron insumos legibles en la planilla. Verifica que contenga columnas de Medicamento/Insumo, Cantidad, Lote y Vencimiento."
+          : "No readable items found in spreadsheet. Check that it contains Item, Quantity, Batch and Expiration columns.");
       }
 
+      const parsedItems = parsedRows.map((row, idx) => {
+        // Match catalog product safely by exact match or high-confidence token + dosage check
+        const matchedProduct = matchCatalogProduct(row.rawId, row.name, row.presentation, products);
+
+        return {
+          id: `item_${Date.now()}_${idx}`,
+          // CRITICAL: NEVER overwrite the remito item name or presentation with catalog name!
+          name: row.name,
+          presentation: row.presentation,
+          quantity: row.quantity,
+          requestedQuantity: row.requestedQuantity,
+          batchCode: row.batchCode,
+          expirationDate: row.expirationDate,
+          productId: matchedProduct ? matchedProduct.id : undefined,
+          isDelivered: row.isDelivered,
+          selected: row.isDelivered && row.quantity > 0,
+          statusNote: row.statusNote,
+          rawId: row.rawId,
+        };
+      });
+
+      setReceiptItems(parsedItems);
+      const hasDelivered = parsedItems.some(i => i.isDelivered && i.quantity > 0);
+      setReceiptFilter(hasDelivered ? 'delivered' : 'all');
+      playBeep("success");
     } catch (err: any) {
       console.error(err);
-      setReceiptError(err.message || 'Error.');
+      setReceiptError(err.message || "Error al procesar el archivo.");
+    } finally {
       setIsProcessingReceipt(false);
     }
   };
 
   const handleConfirmReceiptImport = () => {
-    if (receiptItems.length === 0) return;
+    const itemsToImport = receiptItems.filter(item => item.selected !== false && item.quantity > 0);
+    if (itemsToImport.length === 0) {
+      setReceiptError(lang === 'es'
+        ? 'No hay insumos seleccionados con cantidad mayor a 0 para ingresar al depósito.'
+        : 'No items selected with quantity > 0 to import.');
+      return;
+    }
 
     let updatedList = [...products];
     let itemsAddedCount = 0;
     let itemsUpdatedCount = 0;
+    const isMB = receiptOrigin === 'MB';
 
-    receiptItems.forEach(item => {
+    itemsToImport.forEach(item => {
       const existingProduct = item.productId
         ? updatedList.find(p => p.id === item.productId)
         : updatedList.find(
@@ -492,20 +421,36 @@ export default function FarmaceuticoView({
 
       const newBatch: StockBatch = {
         id: `b_recept_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-        batchCode: item.batchCode || 'MUNI',
+        batchCode: item.batchCode || (isMB ? 'LOTE-MB' : 'MUNI'),
         expirationDate: item.expirationDate || '2027-12-31',
-        quantity: item.quantity
+        quantity: item.quantity,
+        origin: receiptOrigin,
+        receiptNumber: receiptFileName || (isMB ? 'REMITO-MB' : 'REMITO-MUNI')
       };
 
       if (existingProduct) {
         const existingBatch = existingProduct.batches.find(b => b.batchCode === newBatch.batchCode);
         if (existingBatch) {
           existingProduct.batches = existingProduct.batches.map(b => 
-            b.batchCode === newBatch.batchCode ? { ...b, quantity: b.quantity + newBatch.quantity } : b
+            b.batchCode === newBatch.batchCode ? { 
+              ...b, 
+              quantity: b.quantity + newBatch.quantity,
+              origin: b.origin || receiptOrigin,
+              receiptNumber: b.receiptNumber || newBatch.receiptNumber
+            } : b
           );
         } else {
           existingProduct.batches = [...existingProduct.batches, newBatch];
         }
+        
+        // Si el remito es MB, asegurar que Farmacia Dispensa tenga acceso a este producto
+        if (isMB && !existingProduct.allowedServices.includes(PredefinedService.FARMACIA)) {
+          existingProduct.allowedServices = [...existingProduct.allowedServices, PredefinedService.FARMACIA];
+        }
+        if (isMB && !existingProduct.programOrigin) {
+          existingProduct.programOrigin = 'MB';
+        }
+        
         itemsUpdatedCount++;
       } else {
         const newProduct: Product = {
@@ -513,12 +458,16 @@ export default function FarmaceuticoView({
           name: item.name,
           presentation: item.presentation,
           minStock: 10,
-          category: 'Compartido',
+          category: isMB ? PredefinedService.FARMACIA : 'Compartido',
           shelfLetter: 'A',
           shelfLevel: 1,
           batches: [newBatch],
           productType: 'Med',
-          allowedServices: [PredefinedService.GUARDIA, PredefinedService.LABORATORIO, PredefinedService.IRAB, PredefinedService.FARMACIA]
+          programOrigin: isMB ? 'MB' : 'Muni',
+          // Para insumos de Medicamentos Bonaerenses, su ÚNICO cliente autorizado es Farmacia Dispensa
+          allowedServices: isMB
+            ? [PredefinedService.FARMACIA]
+            : [PredefinedService.GUARDIA, PredefinedService.LABORATORIO, PredefinedService.IRAB, PredefinedService.FARMACIA]
         };
         updatedList.unshift(newProduct);
         itemsAddedCount++;
@@ -527,6 +476,10 @@ export default function FarmaceuticoView({
 
     onUpdateProducts(updatedList);
 
+    const auditMessage = isMB
+      ? `Recepción de remito Medicamentos Bonaerenses (MB) '${receiptFileName}': se incrementó stock a ${itemsUpdatedCount} insumos y se crearon ${itemsAddedCount} nuevos medicamentos con destino exclusivo a Farmacia Dispensa.`
+      : `Recepción de remito municipal '${receiptFileName}': se sumó stock a ${itemsUpdatedCount} insumos existentes y se crearon ${itemsAddedCount} nuevos.`;
+
     onAppendAudit({
       id: `audit_${Date.now()}`,
       timestamp: new Date().toISOString(),
@@ -534,13 +487,15 @@ export default function FarmaceuticoView({
       userName: currentUser.name,
       userRole: Role.FARMACEUTICO,
       action: 'CATALOG_UPDATE',
-      details: `Recepción de remito municipal '${receiptFileName}': se sumó stock a ${itemsUpdatedCount} insumos existentes y se crearon ${itemsAddedCount} nuevos.`
+      details: auditMessage
     });
 
     setReceiptSuccessMsg(
       lang === 'es'
-        ? `✓ ¡Éxito! Se incrementó el stock de ${itemsUpdatedCount} insumos existentes y se crearon ${itemsAddedCount} nuevos medicamentos en el catálogo.`
-        : `✓ Success! Increased stock for ${itemsUpdatedCount} existing items and created ${itemsAddedCount} new catalog items.`
+        ? isMB 
+          ? `✓ ¡Éxito! Remito de Medicamentos Bonaerenses procesado: se sumó stock a ${itemsUpdatedCount} insumos y se crearon ${itemsAddedCount} nuevos identificados como MB para Farmacia Dispensa.`
+          : `✓ ¡Éxito! Remito Municipal procesado: se incrementó el stock de ${itemsUpdatedCount} insumos existentes y se crearon ${itemsAddedCount} nuevos medicamentos.`
+        : `✓ Success! Processed receipt: increased stock for ${itemsUpdatedCount} existing items and added ${itemsAddedCount} new items.`
     );
     setReceiptItems([]);
     setReceiptFileName('');
@@ -557,11 +512,251 @@ export default function FarmaceuticoView({
     return new Date().toISOString().split('T')[0];
   });
 
-  
-      
-  
+  // --- LOGICA DE IMPORTACIÓN LOGÍSTICA DESDE CSV ---
+  const [csvItems, setCsvItems] = useState<{
+    name: string;
+    presentation: string;
+    minStock: number;
+    category: PredefinedService | 'Compartido';
+    batchCode?: string;
+    expirationDate?: string;
+    quantity?: number;
+    shelfLetter?: string;
+    shelfLevel?: number;
+  }[]>([]);
+  const [csvFileName, setCsvFileName] = useState('');
+  const [csvError, setCsvError] = useState('');
+  const [isDragOver, setIsDragOver] = useState(false);
 
-  
+  const parseCSVText = (text: string) => {
+    try {
+      setCsvError('');
+      const lines = text.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+      if (lines.length === 0) {
+        setCsvError(lang === 'es' ? 'El archivo está vacío o sin datos legibles.' : 'The file is empty or lacks readable rows.');
+        return;
+      }
+
+      // Detetección del delimitador: tabulador, coma, o punto y coma
+      const firstLine = lines[0];
+      let separator = ';';
+      if (firstLine.includes('\t')) {
+        separator = '\t';
+      } else if (firstLine.includes(';') && firstLine.includes(',')) {
+        separator = ';'; // preferir punto y coma si ambos existen
+      } else if (firstLine.includes(',')) {
+        separator = ',';
+      } else if (firstLine.includes(';')) {
+        separator = ';';
+      }
+
+      // Detectar si la primera fila es cabecera
+      let hasHeader = false;
+      const firstLineLower = firstLine.toLowerCase();
+      if (
+        firstLineLower.includes('nombre') || 
+        firstLineLower.includes('name') || 
+        firstLineLower.includes('insumo') || 
+        firstLineLower.includes('present') || 
+        firstLineLower.includes('stock') || 
+        firstLineLower.includes('categor') ||
+        firstLineLower.includes('lote') ||
+        firstLineLower.includes('venc') ||
+        firstLineLower.includes('cant') ||
+        firstLineLower.includes('estanter') ||
+        firstLineLower.includes('estante')
+      ) {
+        hasHeader = true;
+      }
+
+      const rowsToParse = hasHeader ? lines.slice(1) : lines;
+      const parsed = rowsToParse.map((line, index) => {
+        let parts: string[] = [];
+        if (separator === ',') {
+          // regex básico para separar por comas respetando comillas
+          const matches = line.match(/(".*?"|[^",\s]+)(?=\s*,|\s*$)/g) || line.split(',');
+          parts = matches.map(m => m.replace(/^"|"$/g, '').trim());
+        } else {
+          parts = line.split(separator).map(p => p.trim());
+        }
+
+        if (parts.length < 2) {
+          return null; // Fila vacía o incompleta
+        }
+
+        const name = parts[0] ? parts[0].replace(/^"|"$/g, '').trim() : '';
+        const presentation = parts[1] ? parts[1].replace(/^"|"$/g, '').trim() : '';
+        if (!name || !presentation) return null;
+
+        // Stock mínimo base
+        let minStock = 10;
+        if (parts[2]) {
+          const num = parseInt(parts[2], 10);
+          if (!isNaN(num)) minStock = num;
+        }
+
+        // Categoría / Sector
+        let category: PredefinedService | 'Compartido' = 'Compartido';
+        if (parts[3]) {
+          const catLower = parts[3].toLowerCase();
+          if (catLower.includes('guardia')) {
+            category = PredefinedService.GUARDIA;
+          } else if (catLower.includes('lab') || catLower.includes('laboratorio')) {
+            category = PredefinedService.LABORATORIO;
+          } else if (catLower.includes('irab')) {
+            category = PredefinedService.IRAB;
+          } else if (catLower.includes('compartido') || catLower.includes('todos') || catLower.includes('shared')) {
+            category = 'Compartido';
+          }
+        }
+
+        // Lote inicial, vencimiento y cantidad opcional
+        const batchCode = parts[4] ? parts[4].replace(/^"|"$/g, '').trim() : undefined;
+        const expirationDate = parts[5] ? parts[5].replace(/^"|"$/g, '').trim() : undefined;
+        let quantity: number | undefined = undefined;
+        if (parts[6]) {
+          const numQty = parseInt(parts[6], 10);
+          if (!isNaN(numQty)) quantity = numQty;
+        }
+
+        // Estantería y nivel opcional
+        const shelfLetter = parts[7] ? parts[7].replace(/^"|"$/g, '').trim().toUpperCase() : undefined;
+        let shelfLevel: number | undefined = undefined;
+        if (parts[8]) {
+          const numLevel = parseInt(parts[8], 10);
+          if (!isNaN(numLevel)) shelfLevel = numLevel;
+        }
+
+        return {
+          name,
+          presentation,
+          minStock,
+          category,
+          batchCode,
+          expirationDate,
+          quantity,
+          shelfLetter,
+          shelfLevel
+        };
+      }).filter((item): item is NonNullable<typeof item> => item !== null);
+
+      if (parsed.length === 0) {
+        setCsvError(lang === 'es' ? 'No se detectaron filas válidas de insumos en el archivo.' : 'No valid product rows parsed from file.');
+        return;
+      }
+
+      setCsvItems(parsed);
+    } catch (err: any) {
+      setCsvError(lang === 'es' ? `Error procesando CSV: ${err.message || err}` : `CSV parse error: ${err.message || err}`);
+    }
+  };
+
+  const handleCatalogFileUpload = async (file: File) => {
+    try {
+      setCsvFileName(file.name);
+      setCsvError('');
+      const fileNameLower = file.name.toLowerCase();
+      if (fileNameLower.endsWith('.xlsx') || fileNameLower.endsWith('.xls')) {
+        const arrayBuffer = await file.arrayBuffer();
+        const wb = XLSX.read(arrayBuffer, { type: 'array' });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        const csvText = XLSX.utils.sheet_to_csv(ws, { FS: ';' });
+        parseCSVText(csvText);
+      } else {
+        const reader = new FileReader();
+        reader.onload = (evt) => {
+          if (evt.target?.result) {
+            parseCSVText(evt.target.result as string);
+          }
+        };
+        reader.readAsText(file);
+      }
+    } catch (err: any) {
+      setCsvError(lang === 'es' ? `Error al leer planilla: ${err.message || err}` : `Error reading spreadsheet: ${err.message || err}`);
+    }
+  };
+
+  const handleImportCSVConfirm = () => {
+    if (csvItems.length === 0) return;
+
+    let updatedList = [...products];
+    let importedNew = 0;
+    let updatedExisting = 0;
+
+    csvItems.forEach(item => {
+      // Comparación ignorando mayúsculas y espacios extras
+      const existingProduct = updatedList.find(
+        p => p.name.trim().toLowerCase() === item.name.toLowerCase() &&
+             p.presentation.trim().toLowerCase() === item.presentation.toLowerCase()
+      );
+
+      const batchCodeVal = item.batchCode || 'L-IMPORT-01';
+      const expDateVal = item.expirationDate || '2027-12-31';
+      const qtyVal = item.quantity !== undefined ? item.quantity : 25;
+
+      const newBatch: StockBatch = {
+        id: `b_imptr_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+        batchCode: batchCodeVal,
+        expirationDate: expDateVal,
+        quantity: qtyVal
+      };
+
+      if (existingProduct) {
+        // Combinar con insumo ya en catálogo (sumar stock o añadir lote)
+        const hasSameBatch = existingProduct.batches.some(b => b.batchCode === batchCodeVal);
+        const nextBatches = hasSameBatch
+          ? existingProduct.batches.map(b => b.batchCode === batchCodeVal ? { ...b, quantity: b.quantity + qtyVal } : b)
+          : [...existingProduct.batches, newBatch];
+
+        existingProduct.batches = nextBatches;
+        if (item.minStock) {
+          existingProduct.minStock = item.minStock;
+        }
+        if (item.shelfLetter) {
+          existingProduct.shelfLetter = item.shelfLetter;
+        }
+        if (item.shelfLevel !== undefined) {
+          existingProduct.shelfLevel = item.shelfLevel;
+        }
+        updatedExisting++;
+      } else {
+        // Insertar nuevo medicamento completo
+        const newProduct: Product = {
+          id: `p_csv_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+          name: item.name,
+          presentation: item.presentation,
+          minStock: item.minStock,
+          category: item.category,
+          shelfLetter: item.shelfLetter || 'A',
+          shelfLevel: item.shelfLevel !== undefined ? item.shelfLevel : 1,
+          batches: [newBatch],
+          productType: 'Med',
+          allowedServices: item.category === 'Compartido'
+            ? [PredefinedService.GUARDIA, PredefinedService.LABORATORIO, PredefinedService.IRAB, PredefinedService.FARMACIA]
+            : [item.category]
+        };
+        updatedList.unshift(newProduct);
+        importedNew++;
+      }
+    });
+
+    onUpdateProducts(updatedList);
+
+    onAppendAudit({
+      id: `aud_${Date.now()}`,
+      timestamp: new Date().toISOString(),
+      userId: currentUser.id,
+      userName: currentUser.name,
+      userRole: currentUser.role,
+      action: 'CATALOG_UPDATE',
+      details: `Importación masiva: se registraron ${importedNew} insumos nuevos y se recargó stock de ${updatedExisting} pre-existentes.`
+    });
+
+    setCsvItems([]);
+    setCsvFileName('');
+    setCsvError('');
+    playBeep('success');
+  };
 
   const handlePrintPDFReport = () => {
     const printWindow = window.open('', '_blank');
@@ -913,11 +1108,43 @@ export default function FarmaceuticoView({
   const [pPresentation, setPPresentation] = useState('');
   const [pMinStock, setPMinStock] = useState(10);
   const [pCategory, setPCategory] = useState<PredefinedService | 'Compartido'>(PredefinedService.GUARDIA);
+  const [pAllowedServices, setPAllowedServices] = useState<string[]>([PredefinedService.GUARDIA]);
   const [pShelfLetter, setPShelfLetter] = useState('A');
   const [pShelfLevel, setPShelfLevel] = useState(1);
   const [pProductType, setPProductType] = useState<'Med' | 'PM'>('Med');
   const [catalogTypeFilter, setCatalogTypeFilter] = useState<'All' | 'Med' | 'PM'>('All');
-  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // Alternar o seleccionar servicios en el formulario de insumos
+  const toggleServiceInForm = (svc: string) => {
+    setPAllowedServices(prev => {
+      const exists = prev.includes(svc);
+      const next = exists ? prev.filter(s => s !== svc) : [...prev, svc];
+      if (next.length > 1) {
+        setPCategory('Compartido');
+      } else if (next.length === 1) {
+        setPCategory(next[0] as PredefinedService);
+      }
+      return next;
+    });
+  };
+
+  const selectAllServicesInForm = () => {
+    const all = [PredefinedService.GUARDIA, PredefinedService.LABORATORIO, PredefinedService.IRAB, PredefinedService.FARMACIA];
+    setPAllowedServices(all);
+    setPCategory('Compartido');
+  };
+
+  const resetProductForm = () => {
+    setEditingProduct(null);
+    setPName('');
+    setPPresentation('');
+    setPMinStock(10);
+    setPAllowedServices([PredefinedService.GUARDIA]);
+    setPCategory(PredefinedService.GUARDIA);
+    setPShelfLetter('A');
+    setPShelfLevel(1);
+    setPProductType('Med');
+  };
 
   // Nuevos estados de búsqueda para mejorar localizabilidad de insumos creados
   const [catalogSearchTerm, setCatalogSearchTerm] = useState('');
@@ -1284,19 +1511,22 @@ export default function FarmaceuticoView({
     return products.find(p => p.id === adjustProductId);
   }, [products, adjustProductId]);
 
-const handleCreateOrUpdateProduct = (e: React.FormEvent) => {
-  e.preventDefault();
-  if (!pName.trim() || !pPresentation.trim()) return;
-  if (isSubmitting) return;
-  setIsSubmitting(true);
+  const handleCreateOrUpdateProduct = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!pName.trim() || !pPresentation.trim()) return;
 
-  // Normalizar textos para comparación (quitar tildes, espacios extras, lowercase)
-  const normalizeText = (text: string) =>
-    text.trim().toLowerCase()
-      .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
-      .replace(/\s+/g, ' ');
+    if (pAllowedServices.length === 0) {
+      alert(lang === 'es' 
+        ? '⚠️ Por favor seleccione al menos un servicio para que el insumo tenga visibilidad y pueda ser solicitado.' 
+        : '⚠️ Please select at least one service so the item can be ordered.');
+      return;
+    }
 
-  try {
+    const calculatedCategory: PredefinedService | 'Compartido' = 
+      pAllowedServices.length > 1 
+        ? 'Compartido' 
+        : (pAllowedServices[0] as PredefinedService);
+
     let updatedList = [...products];
 
     if (editingProduct) {
@@ -1306,11 +1536,12 @@ const handleCreateOrUpdateProduct = (e: React.FormEvent) => {
             ...p,
             name: pName.trim(),
             presentation: pPresentation.trim(),
-            minStock: Number(pMinStock) || 10,
-            category: pCategory || 'Compartido',
-            shelfLetter: pShelfLetter || 'A',
-            shelfLevel: Number(pShelfLevel) || 1,
-            productType: pProductType || 'Med',
+            minStock: Number(pMinStock),
+            category: calculatedCategory,
+            allowedServices: [...pAllowedServices],
+            shelfLetter: pShelfLetter,
+            shelfLevel: Number(pShelfLevel),
+            productType: pProductType,
           };
         }
         return p;
@@ -1323,49 +1554,27 @@ const handleCreateOrUpdateProduct = (e: React.FormEvent) => {
         userName: currentUser.name,
         userRole: currentUser.role,
         action: 'CATALOG_UPDATE',
-        details: `Actualizó insumo catálogo: ${pName} (${pPresentation})`
+        details: `Actualizó insumo catálogo: ${pName} (${pPresentation}) [Servicios: ${pAllowedServices.join(', ')}]`
       });
 
     } else {
-      // --- VALIDACIÓN ANTI-DUPLICADO ---
-      const normalizedName = normalizeText(pName);
-      const normalizedPres = normalizeText(pPresentation);
-
-      const duplicate = products.find(p =>
-        normalizeText(p.name) === normalizedName &&
-        normalizeText(p.presentation) === normalizedPres
-      );
-
-      if (duplicate) {
-        setDialog({
-          isOpen: true,
-          title: lang === 'es' ? 'Insumo duplicado' : 'Duplicate Product',
-          message: lang === 'es'
-            ? `Ya existe un insumo con el nombre "${duplicate.name}" y presentación "${duplicate.presentation}" (ID: ${duplicate.id}). Si querés agregar stock, usá "Ajuste Stock manual" o "Recibir Remito Municipal".`
-            : `A product with this name and presentation already exists (ID: ${duplicate.id}). Use stock adjustment or receipt upload to add inventory.`,
-          severity: 'warning'
-        });
-        setIsSubmitting(false);
-        return;
-      }
-
       const newId = `p_added_${Date.now()}`;
       const newProduct: Product = {
         id: newId,
         name: pName.trim(),
         presentation: pPresentation.trim(),
-        minStock: Number(pMinStock) || 10,
-        category: pCategory || 'Compartido',
-        shelfLetter: pShelfLetter || 'A',
-        shelfLevel: Number(pShelfLevel) || 1,
-        productType: pProductType || 'Med',
-        batches: [],
-        
-        allowedServices: pCategory === 'Compartido'
-          ? [PredefinedService.GUARDIA, PredefinedService.LABORATORIO, PredefinedService.IRAB, PredefinedService.FARMACIA]
-          : [pCategory as PredefinedService]
+        minStock: Number(pMinStock),
+        category: calculatedCategory,
+        shelfLetter: pShelfLetter,
+        shelfLevel: Number(pShelfLevel),
+        productType: pProductType,
+        batches: [
+          // Lote inicial para completar la entidad
+          { id: `b_init_${Date.now()}`, batchCode: 'L-NUEVO-01', expirationDate: '2027-12-31', quantity: 20 }
+        ],
+        allowedServices: [...pAllowedServices]
       };
-
+      
       updatedList.unshift(newProduct);
 
       onAppendAudit({
@@ -1375,23 +1584,14 @@ const handleCreateOrUpdateProduct = (e: React.FormEvent) => {
         userName: currentUser.name,
         userRole: currentUser.role,
         action: 'CATALOG_UPDATE',
-        details: `Agregó nuevo insumo a depósito: ${pName}`
+        details: `Agregó nuevo insumo a depósito: ${pName} [Servicios: ${pAllowedServices.join(', ')}]`
       });
     }
 
     onUpdateProducts(updatedList);
-    setPName('');
-    setPPresentation('');
-    setPMinStock(10);
-    setPShelfLetter('A');
-    setPShelfLevel(1);
-    setPProductType('Med');
-    setEditingProduct(null);
+    resetProductForm();
     playBeep('success');
-  } finally {
-    setIsSubmitting(false);
-  }
-};
+  };
 
   const handleDeleteProduct = (pId: string) => {
     setDialog({
@@ -1426,69 +1626,62 @@ const handleCreateOrUpdateProduct = (e: React.FormEvent) => {
     setPName(p.name);
     setPPresentation(p.presentation);
     setPMinStock(p.minStock);
-    setPCategory(p.category);
+
+    const services = Array.isArray(p.allowedServices) && p.allowedServices.length > 0
+      ? [...p.allowedServices]
+      : ((p.category as string) === 'Compartido' 
+          ? [PredefinedService.GUARDIA, PredefinedService.LABORATORIO, PredefinedService.IRAB, PredefinedService.FARMACIA]
+          : [p.category as string]);
+
+    setPAllowedServices(services);
+    setPCategory(services.length > 1 ? 'Compartido' : (services[0] as PredefinedService) || p.category);
     setPShelfLetter(p.shelfLetter || 'A');
     setPShelfLevel(p.shelfLevel || 1);
     setPProductType(p.productType || 'Med');
+
+    const formElement = document.getElementById('admin-pname-input');
+    if (formElement) {
+      formElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      formElement.focus();
+    }
   };
 
-  // ASIGNACIÓN MUCHOS A MUCHOS
-  // ASIGNACIÓN MUCHOS A MUCHOS
+  // ASIGNACIÓN MUCHOS A MUCHOS (VISIBILIDAD CRUZADA)
   const handleToggleMapping = (productId: string, serviceName: string) => {
-    // 1. ENCONTRAR EL PRODUCTO ACTUAL
-    const product = products.find(p => p.id === productId);
-    if (!product) return;
+    let affectedProductName = '';
+    const updated = products.map(p => {
+      if (p.id === productId) {
+        affectedProductName = p.name;
+        const allowed = Array.isArray(p.allowedServices) && p.allowedServices.length > 0
+          ? [...p.allowedServices] 
+          : (p.category as string) === 'Compartido'
+            ? [PredefinedService.GUARDIA, PredefinedService.LABORATORIO, PredefinedService.IRAB, PredefinedService.FARMACIA]
+            : [p.category].filter((c): c is PredefinedService => Boolean(c) && (c as string) !== 'Compartido');
 
-    // FIX: Normalizar el nombre del servicio a toggle para comparación segura
-    const normalizedToggleService = normalizeServiceName(serviceName);
+        let nextAllowed: string[];
+        if (allowed.includes(serviceName)) {
+          nextAllowed = allowed.filter(s => s !== serviceName);
+        } else {
+          nextAllowed = [...allowed, serviceName];
+        }
 
-    // 2. OBTENER LA LISTA ACTUAL DE SERVICIOS PERMITIDOS
-    // Si allowedServices es undefined/null, usar la categoría como fallback
-    let currentAllowed: string[] = [];
+        const newCategory: PredefinedService | 'Compartido' = 
+          nextAllowed.length > 1 
+            ? 'Compartido' 
+            : (nextAllowed[0] as PredefinedService) || 'Compartido';
 
-    if (Array.isArray(product.allowedServices) && product.allowedServices.length > 0) {
-      currentAllowed = [...product.allowedServices];
-    } else if ((product.category as string) === 'Compartido') {
-      currentAllowed = [PredefinedService.GUARDIA, PredefinedService.LABORATORIO, PredefinedService.IRAB, PredefinedService.FARMACIA];
-    } else if (product.category && (product.category as string) !== 'Compartido') {
-      currentAllowed = [product.category];
-    }
+        // Sincronizar con el formulario si se está editando este mismo insumo
+        if (editingProduct && editingProduct.id === productId) {
+          setPAllowedServices(nextAllowed);
+          setPCategory(newCategory);
+        }
 
-    // FIX: 3. CALCULAR LA NUEVA LISTA (toggle: si está, lo saco; si no, lo pongo)
-    // Comparar normalizando para evitar problemas de mayúsculas/espacios
-    const isCurrentlyAllowed = currentAllowed.some(
-      s => normalizeServiceName(s) === normalizedToggleService
-    );
-    const nextAllowed = isCurrentlyAllowed
-      ? currentAllowed.filter(s => normalizeServiceName(s) !== normalizedToggleService)  // Quitar
-      : [...currentAllowed, serviceName];                                               // Agregar (guardar el original del enum)
-
-    // 4. LOG PARA DEBUG (lo vas a ver en la consola)
-    console.log(`[ToggleMapping] ${product.name}:`, {
-      antes: currentAllowed,
-      despues: nextAllowed,
-      accion: isCurrentlyAllowed ? 'QUITAR' : 'AGREGAR',
-      servicio: serviceName
+        return { ...p, allowedServices: nextAllowed, category: newCategory };
+      }
+      return p;
     });
 
-    // 5. CREAR EL PRODUCTO ACTUALIZADO
-    const updatedProduct = {
-      ...product,
-      allowedServices: nextAllowed,
-      // Si quedó con más de un servicio, la categoría pasa a "Compartido"
-      category: nextAllowed.length > 1 ? 'Compartido' as any : (nextAllowed[0] || product.category)
-    };
-
-    // 6. CREAR LA LISTA COMPLETA DE PRODUCTOS ACTUALIZADA
-    const updatedProducts = products.map(p => 
-      p.id === productId ? updatedProduct : p
-    );
-
-    // 7. ACTUALIZAR EL ESTADO LOCAL INMEDIATAMENTE (antes de guardar en Supabase)
-    // Esto hace que el botón cambie visualmente al instante
-    onUpdateProducts(updatedProducts);
-
-    // 8. AUDITORÍA
+    onUpdateProducts(updated);
     onAppendAudit({
       id: `aud_${Date.now()}`,
       timestamp: new Date().toISOString(),
@@ -1496,7 +1689,7 @@ const handleCreateOrUpdateProduct = (e: React.FormEvent) => {
       userName: currentUser.name,
       userRole: currentUser.role,
       action: 'CATALOG_UPDATE',
-      details: `Modificó visibilidad de ${product.name}: ${isCurrentlyAllowed ? 'quitó' : 'agregó'} ${serviceName}. Ahora: ${nextAllowed.join(', ')}`
+      details: `Modificó asignación de servicios para: ${affectedProductName || productId}`
     });
   };
 
@@ -1609,71 +1802,69 @@ const handleCreateOrUpdateProduct = (e: React.FormEvent) => {
   };
 
   // ABM USUARIOS
-const handleCreateOrUpdateUser = (e: React.FormEvent) => {
-  e.preventDefault();
-  if (!uName.trim() || !uEmail.trim()) return;
+  const handleCreateOrUpdateUser = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!uName.trim() || !uEmail.trim()) return;
 
-  let updatedList = [...users];
+    let updatedList = [...users];
 
-  if (editingUser) {
-    updatedList = updatedList.map(u => {
-      if (u.id === editingUser.id) {
-        return {
-          ...u,
-          name: uName.trim(),
-          email: uEmail.trim().toLowerCase(),
-          role: uRole,
-          service: uRole === Role.ENFERMERO ? uService : undefined,
-          // CORRECCIÓN: Nunca guardar undefined en Firestore
-          password: uPassword.trim() || '123456'
-        };
-      }
-      return u;
-    });
+    if (editingUser) {
+      updatedList = updatedList.map(u => {
+        if (u.id === editingUser.id) {
+          return {
+            ...u,
+            name: uName.trim(),
+            email: uEmail.trim().toLowerCase(),
+            role: uRole,
+            service: uRole === Role.ENFERMERO ? uService : undefined,
+            password: uPassword.trim() || undefined
+          };
+        }
+        return u;
+      });
 
-    onAppendAudit({
-      id: `aud_${Date.now()}`,
-      timestamp: new Date().toISOString(),
-      userId: currentUser.id,
-      userName: currentUser.name,
-      userRole: currentUser.role,
-      action: 'USER_UPDATE',
-      details: `Modificó credenciales usuario: ${uName} (${uEmail})`
-    });
+      onAppendAudit({
+        id: `aud_${Date.now()}`,
+        timestamp: new Date().toISOString(),
+        userId: currentUser.id,
+        userName: currentUser.name,
+        userRole: currentUser.role,
+        action: 'USER_UPDATE',
+        details: `Modificó credenciales usuario: ${uName} (${uEmail})`
+      });
 
-  } else {
-    const newUser: User = {
-      id: `u_${Date.now()}`,
-      name: uName.trim(),
-      email: uEmail.trim().toLowerCase(),
-      role: uRole,
-      service: uRole === Role.ENFERMERO ? uService : undefined,
-      // CORRECCIÓN: Nunca guardar undefined en Firestore
-      password: uPassword.trim() || '123456'
-    };
-    
-    updatedList.push(newUser);
+    } else {
+      const newUser: User = {
+        id: `u_${Date.now()}`,
+        name: uName.trim(),
+        email: uEmail.trim().toLowerCase(),
+        role: uRole,
+        service: uRole === Role.ENFERMERO ? uService : undefined,
+        password: uPassword.trim() || undefined
+      };
+      
+      updatedList.push(newUser);
 
-    onAppendAudit({
-      id: `aud_${Date.now()}`,
-      timestamp: new Date().toISOString(),
-      userId: currentUser.id,
-      userName: currentUser.name,
-      userRole: currentUser.role,
-      action: 'USER_UPDATE',
-      details: `Registró nuevo personal CAPS: ${uName} como ${uRole}`
-    });
-  }
+      onAppendAudit({
+        id: `aud_${Date.now()}`,
+        timestamp: new Date().toISOString(),
+        userId: currentUser.id,
+        userName: currentUser.name,
+        userRole: currentUser.role,
+        action: 'USER_UPDATE',
+        details: `Registró nuevo personal CAPS: ${uName} como ${uRole}`
+      });
+    }
 
-  onUpdateUsers(updatedList);
-  setUName('');
-  setUEmail('');
-  setURole(Role.ENFERMERO);
-  setUService(PredefinedService.GUARDIA);
-  setUPassword('');
-  setEditingUser(null);
-  playBeep('success');
-};
+    onUpdateUsers(updatedList);
+    setUName('');
+    setUEmail('');
+    setURole(Role.ENFERMERO);
+    setUService(PredefinedService.GUARDIA);
+    setUPassword('');
+    setEditingUser(null);
+    playBeep('success');
+  };
 
   const copyCredentials = (u: User) => {
     const credText = `Portal: StockDepo Sabatto\nPersonal: ${u.name}\nRol: ${u.role}${u.service ? ` (${u.service})` : ''}\nEmail: ${u.email}\nContraseña: ${u.password || '123456'}`;
@@ -1739,27 +1930,19 @@ const handleCreateOrUpdateUser = (e: React.FormEvent) => {
   // --- DINAMIC CPM & PLANILLA DE CONSUMO MENSUAL (ÚLTIMOS 6 MESES COLUMNAS) ---
   const months = useMemo(() => {
     const list: { key: string; label: string }[] = [];
-    const start = new Date(startDate);
-    const end = new Date(endDate);
-    if (isNaN(start.getTime()) || isNaN(end.getTime()) || start > end) return list;
-
-    let cursor = new Date(start.getFullYear(), start.getMonth(), 1);
-    const lastMonth = new Date(end.getFullYear(), end.getMonth(), 1);
-
-    let safety = 0;
-    while (cursor <= lastMonth && safety < 24) {
-      const yyyy = cursor.getFullYear();
-      const mm = String(cursor.getMonth() + 1).padStart(2, '0');
-      const monthLabel = cursor.toLocaleString(lang === 'es' ? 'es-AR' : 'en-US', { month: 'short' });
+    const now = new Date();
+    for (let i = 5; i >= 0; i--) {
+      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      const yyyy = d.getFullYear();
+      const mm = String(d.getMonth() + 1).padStart(2, '0');
+      const monthLabel = d.toLocaleString(lang === 'es' ? 'es-AR' : 'en-US', { month: 'short' });
       list.push({
         key: `${yyyy}-${mm}`,
         label: `${monthLabel.toUpperCase()} ${yyyy}`
       });
-      cursor = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1);
-      safety++;
     }
     return list;
-  }, [startDate, endDate, lang]);
+  }, [lang]);
 
   const monthlyConsumptionData = useMemo(() => {
     return products.map(p => {
@@ -1770,7 +1953,6 @@ const handleCreateOrUpdateUser = (e: React.FormEvent) => {
 
       orders
         .filter(o => o.status === 'Entregado')
-        .filter(o => consumptionServiceFilter === 'ALL' || normalizeServiceName(o.service) === consumptionServiceFilter)
         .forEach(ord => {
           const yyyyMm = ord.requestDate.substring(0, 7); // "YYYY-MM"
           if (dynamicQty[yyyyMm] !== undefined) {
@@ -1797,7 +1979,7 @@ const handleCreateOrUpdateUser = (e: React.FormEvent) => {
         suggested
       };
     });
-  }, [products, orders, months, consumptionServiceFilter]);
+  }, [products, orders, months]);
 
   const filteredConsumptionData = useMemo(() => {
     if (!consumptionSearch.trim()) return monthlyConsumptionData;
@@ -2146,19 +2328,33 @@ const handleCreateOrUpdateUser = (e: React.FormEvent) => {
       {/* Menú de Sub-Acciones Admin */}
       <div className="flex flex-wrap gap-2 border-b border-zinc-200 dark:border-zinc-800 pb-2">
         <button
-          onClick={() => setSubTab('catalog')}
+          onClick={() => { setSubTab('catalog'); playBeep('beep'); }}
           className={`px-4 py-2 text-xs font-bold font-sans rounded-xl transition cursor-pointer ${subTab === 'catalog' ? 'bg-orange-600 text-white shadow-sm' : 'hover:bg-zinc-150 text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-900'}`}
         >
           {lang === 'es' ? 'Catálogo ABM' : 'Catalog ABM'}
         </button>
         <button
-          onClick={() => setSubTab('receipt')}
-          className={`px-4 py-2 text-xs font-bold font-sans rounded-xl transition cursor-pointer flex items-center gap-1.5 ${subTab === 'receipt' ? 'bg-orange-600 text-white shadow-sm' : 'hover:bg-zinc-150 text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-900'}`}
+          onClick={() => { setSubTab('mb_stock'); playBeep('beep'); }}
+          className={`px-4 py-2 text-xs font-bold font-sans rounded-xl transition cursor-pointer flex items-center gap-1.5 ${
+            subTab === 'mb_stock' 
+              ? 'bg-blue-600 text-white shadow-sm' 
+              : 'hover:bg-blue-50 dark:hover:bg-blue-950/30 text-blue-700 dark:text-blue-300 border border-blue-500/20'
+          }`}
         >
-          <span>📥 {lang === 'es' ? 'Recibir Remito Municipal' : 'Receive Municipal Receipt'}</span>
+          <Landmark size={13} />
+          <span>{lang === 'es' ? 'Stock & Vencimientos MB' : 'MB Stock & Expiries'}</span>
+          <span className={`ml-1 px-1.5 py-0.2 rounded-full text-[9px] font-mono font-extrabold ${subTab === 'mb_stock' ? 'bg-white/20 text-white' : 'bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200'}`}>
+            {products.filter(p => p.programOrigin === 'MB' || p.batches.some(b => b.origin === 'MB')).length}
+          </span>
         </button>
         <button
-          onClick={() => setSubTab('mapping')}
+          onClick={() => { setSubTab('receipt'); playBeep('beep'); }}
+          className={`px-4 py-2 text-xs font-bold font-sans rounded-xl transition cursor-pointer flex items-center gap-1.5 ${subTab === 'receipt' ? 'bg-orange-600 text-white shadow-sm' : 'hover:bg-zinc-150 text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-900'}`}
+        >
+          <span>📥 {lang === 'es' ? 'Recibir Remitos (Muni / MB)' : 'Receive Delivery Receipts'}</span>
+        </button>
+        <button
+          onClick={() => { setSubTab('mapping'); playBeep('beep'); }}
           className={`px-4 py-2 text-xs font-bold font-sans rounded-xl transition cursor-pointer ${subTab === 'mapping' ? 'bg-orange-600 text-white shadow-sm' : 'hover:bg-zinc-150 text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-900'}`}
         >
           {lang === 'es' ? 'Asignaciones' : 'Cabine Mapping'}
@@ -2254,20 +2450,88 @@ const handleCreateOrUpdateUser = (e: React.FormEvent) => {
                   />
                 </div>
 
-                <div className="space-y-1">
-                  <label className="font-semibold text-zinc-700 dark:text-zinc-300 block">Categoría Base</label>
-                  <select
-                    id="admin-pcat-select"
-                    value={pCategory}
-                    onChange={(e) => setPCategory(e.target.value as any)}
-                    className="w-full text-xs p-2 bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-xl text-zinc-900 dark:text-white"
-                  >
-                    <option value={PredefinedService.GUARDIA}>{PredefinedService.GUARDIA}</option>
-                    <option value={PredefinedService.LABORATORIO}>{PredefinedService.LABORATORIO}</option>
-                    <option value={PredefinedService.IRAB}>{PredefinedService.IRAB}</option>
-                    <option value={PredefinedService.FARMACIA}>{PredefinedService.FARMACIA}</option>
-                    <option value="Compartido">{t.shared}</option>
-                  </select>
+                {/* Asignación de Servicios / Visibilidad Cruzada */}
+                <div className="space-y-2 bg-zinc-50 dark:bg-zinc-950/70 p-3 rounded-xl border border-zinc-200 dark:border-zinc-800">
+                  <div className="flex items-center justify-between">
+                    <label className="font-bold text-zinc-800 dark:text-zinc-200 block text-xs">
+                      {lang === 'es' ? '🏥 Servicios Habilitados (Visibilidad y Pedidos)' : '🏥 Authorized Services (Visibility & Orders)'}
+                    </label>
+                    <button
+                      type="button"
+                      onClick={selectAllServicesInForm}
+                      className="text-[10px] font-bold text-orange-600 hover:text-orange-700 dark:text-orange-400 hover:underline cursor-pointer"
+                    >
+                      {lang === 'es' ? '✓ Todos (Compartido)' : '✓ All (Shared)'}
+                    </button>
+                  </div>
+                  
+                  <p className="text-[10px] text-zinc-400 leading-tight">
+                    {lang === 'es' 
+                      ? 'Marca las casillas de los sectores habilitados para pedir este insumo:' 
+                      : 'Check the sectors authorized to order this item:'}
+                  </p>
+
+                  {/* Casillas para seleccionar o desmarcar cada servicio */}
+                  <div className="grid grid-cols-2 gap-1.5 pt-1">
+                    {[
+                      { svc: PredefinedService.GUARDIA, icon: '🚨', label: 'Guardia' },
+                      { svc: PredefinedService.LABORATORIO, icon: '🔬', label: 'Laboratorio' },
+                      { svc: PredefinedService.IRAB, icon: '🫁', label: 'IRAB' },
+                      { svc: PredefinedService.FARMACIA, icon: '💊', label: 'Farmacia dispensa' }
+                    ].map(({ svc, icon, label }) => {
+                      const isChecked = pAllowedServices.includes(svc);
+                      return (
+                        <div
+                          key={svc}
+                          onClick={() => toggleServiceInForm(svc)}
+                          className={`flex items-center gap-2 p-2 rounded-lg border text-xs cursor-pointer transition select-none ${
+                            isChecked
+                              ? 'bg-orange-50 border-orange-400 text-orange-850 dark:bg-orange-950/40 dark:border-orange-500/60 dark:text-orange-300 font-bold shadow-xs'
+                              : 'bg-white dark:bg-zinc-900 border-zinc-200 dark:border-zinc-800 text-zinc-500 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-850'
+                          }`}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={isChecked}
+                            onChange={() => {}} // handled by parent div onClick
+                            className="size-3.5 rounded text-orange-600 focus:ring-orange-500 cursor-pointer pointer-events-none"
+                          />
+                          <span className="text-[11px] leading-tight flex items-center gap-1 font-medium">
+                            <span>{icon}</span>
+                            <span>{label}</span>
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {/* Resumen / Categoría Base calculada */}
+                  <div className="pt-1">
+                    {pAllowedServices.length === 0 ? (
+                      <div className="text-[11px] text-red-600 dark:text-red-400 font-semibold flex items-center gap-1 bg-red-50 dark:bg-red-950/30 p-2 rounded-lg border border-red-200 dark:border-red-900/40">
+                        <span>⚠️</span>
+                        <span>{lang === 'es' ? 'Debe marcar al menos 1 servicio' : 'Select at least 1 service'}</span>
+                      </div>
+                    ) : pAllowedServices.length === 1 ? (
+                      <div className="flex items-center justify-between text-[11px] text-zinc-700 dark:text-zinc-300 bg-white dark:bg-zinc-900 px-2.5 py-1.5 rounded-lg border border-zinc-200 dark:border-zinc-800">
+                        <span>
+                          {lang === 'es' ? 'Categoría Base:' : 'Base Category:'} <strong className="text-orange-600 dark:text-orange-400">{pAllowedServices[0]}</strong>
+                        </span>
+                        <span className="text-[9px] bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 px-1.5 py-0.5 rounded font-mono font-bold">
+                          Exclusivo
+                        </span>
+                      </div>
+                    ) : (
+                      <div className="flex items-center justify-between text-[11px] text-zinc-700 dark:text-zinc-300 bg-white dark:bg-zinc-900 px-2.5 py-1.5 rounded-lg border border-zinc-200 dark:border-zinc-800">
+                        <span>
+                          {lang === 'es' ? 'Categoría Base:' : 'Base Category:'} <strong className="text-purple-600 dark:text-purple-400">{lang === 'es' ? 'Compartido' : 'Shared'}</strong> ({pAllowedServices.length} servicios)
+                        </span>
+                        <span className="text-[9px] bg-purple-100 dark:bg-purple-950/60 text-purple-700 dark:text-purple-300 px-1.5 py-0.5 rounded font-mono font-bold">
+                          Multi-servicio
+                        </span>
+                      </div>
+                    )}
+                  </div>
                 </div>
 
                 <div className="space-y-1">
@@ -2317,33 +2581,132 @@ const handleCreateOrUpdateUser = (e: React.FormEvent) => {
                   <button
                     id="admin-catalog-submit"
                     type="submit"
-                    disabled={isSubmitting}
-                    className={`flex-1 py-2 font-bold rounded-xl transition ${
-                      isSubmitting
-                        ? 'bg-zinc-400 cursor-not-allowed'
-                        : 'bg-orange-600 hover:bg-orange-700 text-white cursor-pointer'
-                    }`}
+                    className="flex-1 py-2 bg-orange-600 hover:bg-orange-700 text-white font-bold rounded-xl cursor-pointer"
                   >
-                    {isSubmitting
-                      ? (lang === 'es' ? 'Guardando...' : 'Saving...')
-                      : (editingProduct ? 'Editar' : 'Registrar Insumo')
-                    }
+                    {editingProduct ? 'Editar' : 'Registrar Insumo'}
                   </button>
                   {editingProduct && (
                     <button
                       type="button"
-                      onClick={() => { setEditingProduct(null); setPName(''); setPPresentation(''); setPMinStock(10); setPShelfLetter('A'); setPShelfLevel(1); }}
-                      className="py-2 px-3 border border-zinc-200 dark:border-zinc-800 text-zinc-500 rounded-xl font-bold cursor-pointer"
+                      onClick={resetProductForm}
+                      title={lang === 'es' ? 'Cancelar edición' : 'Cancel edit'}
+                      className="py-2 px-3 border border-zinc-200 dark:border-zinc-800 text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200 rounded-xl font-bold cursor-pointer"
                     >
-                      X
+                      ✕
                     </button>
                   )}
                 </div>
               </form>
             </div>
 
+            {/* Importador Masivo CSV */}
+            <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-5 shadow-sm space-y-4">
+              <h3 className="font-sans font-bold text-sm text-zinc-900 dark:text-zinc-50 border-b border-zinc-100 dark:border-zinc-800 pb-2 flex items-center gap-1.5">
+                <Upload size={14} className="text-orange-500" />
+                <span>{lang === 'es' ? 'Importar Catálogo (CSV/Excel)' : 'Bulk CSV/Excel Import'}</span>
+              </h3>
+              
+              <p className="text-[10px] text-zinc-400 leading-relaxed font-sans">
+                {lang === 'es' 
+                  ? 'Permite cargar insumos masivamente desde un archivo tabulado (CSV / Excel). Columnas: Nombre; Presentación; StockMínimo; Categoría; Lote(opc); Vencimiento(opc); Cantidad(opc); Estantería (opc, ej: A-Z); NivelEstante (opc, ej: 1-10).' 
+                  : 'Mass upload medications from a tabbed file. Columns supported: Name; Presentation; MinStock; Category; Batch(opt); Expiration(opt); Qty(opt); Shelf(opt, e.g. B); ShelfLevel(opt, e.g. 3).'}
+              </p>
+
+              {csvItems.length === 0 ? (
+                // Dropzone
+                <div 
+                  onDragOver={(e) => { e.preventDefault(); setIsDragOver(true); }}
+                  onDragLeave={() => setIsDragOver(false)}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    setIsDragOver(false);
+                    const file = e.dataTransfer.files?.[0];
+                    if (file) {
+                      handleCatalogFileUpload(file);
+                    }
+                  }}
+                  className={`border-2 border-dashed rounded-xl p-5 text-center transition ${isDragOver ? 'border-orange-500 bg-orange-50/20' : 'border-zinc-200 dark:border-zinc-800 hover:border-zinc-300 dark:hover:border-zinc-700'}`}
+                >
+                  <label htmlFor="csv-file-upload" className="cursor-pointer space-y-2 block">
+                    <Upload size={20} className="mx-auto text-zinc-400" />
+                    <span className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300">
+                      {lang === 'es' ? 'Arrastra tu archivo Excel o CSV aquí o haz click' : 'Drag Excel or CSV file here or click to browse'}
+                    </span>
+                    <span className="block text-[9px] text-zinc-400">
+                      Formatos soportados: Excel (.xlsx, .xls), CSV (.csv), TXT
+                    </span>
+                    <input 
+                      id="csv-file-upload"
+                      type="file"
+                      accept=".xlsx,.xls,.csv,.txt,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,text/csv"
+                      className="hidden"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (file) {
+                          handleCatalogFileUpload(file);
+                        }
+                      }}
+                    />
+                  </label>
+                </div>
+              ) : (
+                // Preview parsed items
+                <div className="space-y-3 font-sans">
+                  <div className="p-3 bg-orange-50 dark:bg-orange-950/20 border border-orange-200 dark:border-orange-900/30 rounded-xl flex items-center justify-between">
+                    <div>
+                      <p className="font-bold text-orange-900 dark:text-orange-300 text-xs">
+                        {lang === 'es' ? '✓ Insumos detectados' : '✓ Items detected'}
+                      </p>
+                      <p className="text-[10px] text-zinc-500 dark:text-zinc-400">
+                        {csvFileName} ({csvItems.length} {lang === 'es' ? 'filas procesadas' : 'rows processed'})
+                      </p>
+                    </div>
+                    <button 
+                      type="button"
+                      onClick={() => { setCsvItems([]); setCsvFileName(''); }}
+                      className="p-1 hover:bg-orange-100 dark:hover:bg-orange-900/40 rounded-lg text-orange-700 dark:text-orange-300 cursor-pointer"
+                    >
+                      <X size={14} />
+                    </button>
+                  </div>
+
+                  {/* Detalle previsualización */}
+                  <div className="max-h-[140px] overflow-y-auto border border-zinc-150 dark:border-zinc-800 rounded-xl divide-y divide-zinc-100 dark:divide-zinc-800 pr-1">
+                    {csvItems.map((item, idx) => (
+                      <div key={idx} className="p-2 text-[10px] flex justify-between items-center bg-zinc-50/40 dark:bg-zinc-950/20">
+                        <div className="truncate max-w-[130px]">
+                          <p className="font-bold text-zinc-800 dark:text-zinc-200 truncate">{item.name}</p>
+                          <p className="text-[9px] text-zinc-400 truncate">{item.presentation}</p>
+                        </div>
+                        <div className="text-right text-[9px] text-zinc-400 font-mono">
+                          <p className="text-orange-600 font-bold">{item.category}</p>
+                          <p>{lang === 'es' ? 'Stock Inicial: ' : 'Initial Qty:'} {item.quantity !== undefined ? item.quantity : 25}u.</p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  <button 
+                    type="button"
+                    onClick={handleImportCSVConfirm}
+                    className="w-full py-2 bg-orange-600 hover:bg-orange-700 text-white font-bold text-xs rounded-xl flex items-center justify-center gap-1.5 cursor-pointer shadow-md shadow-orange-500/10 transition"
+                  >
+                    <FileSpreadsheet size={13} />
+                    <span>{lang === 'es' ? 'Confirmar Importación' : 'Verify & Commit Items'}</span>
+                  </button>
+                </div>
+              )}
+
+              {csvError && (
+                <div className="p-2 bg-red-50 dark:bg-red-950/20 border border-red-200 dark:border-red-900/30 text-red-600 rounded-xl text-[10px] font-semibold">
+                  {csvError}
+                </div>
+              )}
+            </div>
+
           </div>
-            {/* Listado para Editar/Eliminar */}
+
+          {/* Listado para Editar/Eliminar */}
           <div className="lg:col-span-2 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-5 shadow-sm space-y-4">
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 border-b border-zinc-100 dark:border-zinc-800 pb-2">
               <h3 className="font-sans font-bold text-sm text-zinc-900 dark:text-zinc-50">
@@ -2419,8 +2782,24 @@ const handleCreateOrUpdateUser = (e: React.FormEvent) => {
                         </span>
                       )}
                     </div>
-                    <p className="text-[10px] text-zinc-400 font-mono">{p.presentation} • Base: {p.category} • Min: {p.minStock}</p>
-                    <p className="text-[9px] text-orange-600 font-semibold font-mono">ID: {p.id}</p>
+                    <p className="text-[10px] text-zinc-400 font-mono">{p.presentation} • Min: {p.minStock}</p>
+                    <div className="flex items-center gap-1.5 flex-wrap mt-0.5">
+                      <span className={`px-1.5 py-0.2 rounded text-[9px] font-bold font-mono ${
+                        p.category === 'Compartido' || (p.allowedServices && p.allowedServices.length > 1)
+                          ? 'bg-purple-100 dark:bg-purple-950/40 text-purple-700 dark:text-purple-300 border border-purple-200/40'
+                          : 'bg-orange-100 dark:bg-orange-950/40 text-orange-850 dark:text-orange-300 border border-orange-200/40'
+                      }`}>
+                        {p.category === 'Compartido' || (p.allowedServices && p.allowedServices.length > 1)
+                          ? `🔗 Compartido (${(p.allowedServices || []).length})`
+                          : `📍 ${p.category}`}
+                      </span>
+                      {Array.isArray(p.allowedServices) && p.allowedServices.map(svc => (
+                        <span key={svc} className="px-1 py-0.2 bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 rounded text-[8px] font-medium">
+                          {svc}
+                        </span>
+                      ))}
+                      <span className="text-[9px] text-orange-600 font-semibold font-mono">ID: {p.id}</span>
+                    </div>
                   </div>
                   <div className="flex items-center gap-1.5 shrink-0">
                     <button
@@ -2448,20 +2827,95 @@ const handleCreateOrUpdateUser = (e: React.FormEvent) => {
 
       {subTab === 'receipt' && (
         <div className="space-y-6 animate-fade-in text-xs font-sans">
+          
+          {/* Selector de Procedencia de Remito: Municipal vs Medicamentos Bonaerenses */}
+          <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-4 shadow-sm">
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+              <div>
+                <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-400 block">
+                  {lang === 'es' ? 'Origen del Remito de Ingreso' : 'Receipt Origin & Program'}
+                </span>
+                <p className="text-xs text-zinc-700 dark:text-zinc-300 font-medium">
+                  {receiptOrigin === 'MB' 
+                    ? (lang === 'es' 
+                        ? '🏛️ Programa Medicamentos Bonaerenses (MB) — Cliente exclusivo: Farmacia Dispensa' 
+                        : '🏛️ Medicamentos Bonaerenses (MB) — Exclusive client: Dispensation Pharmacy')
+                    : (lang === 'es' 
+                        ? '🏙️ Depósito Municipal Central — Disponible para todos los servicios' 
+                        : '🏙️ Central Municipal Depot — Available to all services')}
+                </p>
+              </div>
+
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => { setReceiptOrigin('MB'); playBeep('beep'); }}
+                  className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-2 cursor-pointer ${
+                    receiptOrigin === 'MB'
+                      ? 'bg-blue-600 text-white shadow-md shadow-blue-500/20 ring-2 ring-blue-500/30'
+                      : 'bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 hover:bg-zinc-200 dark:hover:bg-zinc-700'
+                  }`}
+                >
+                  <Landmark size={14} />
+                  <span>{lang === 'es' ? 'Medicamentos Bonaerenses (MB)' : 'Bonaerenses Meds (MB)'}</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => { setReceiptOrigin('Muni'); playBeep('beep'); }}
+                  className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-2 cursor-pointer ${
+                    receiptOrigin === 'Muni'
+                      ? 'bg-emerald-600 text-white shadow-md shadow-emerald-500/20 ring-2 ring-emerald-500/30'
+                      : 'bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 hover:bg-zinc-200 dark:hover:bg-zinc-700'
+                  }`}
+                >
+                  <Building2 size={14} />
+                  <span>{lang === 'es' ? 'Depósito Municipal' : 'Municipal Depot'}</span>
+                </button>
+              </div>
+            </div>
+
+            {receiptOrigin === 'MB' && (
+              <div className="mt-3 p-2.5 bg-blue-50 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-900/40 rounded-xl text-[11px] text-blue-850 dark:text-blue-200 flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <span className="text-base">📌</span>
+                  <span>
+                    <strong>Atención:</strong> Todos los insumos ingresados bajo este remito quedarán identificados con la etiqueta <strong>MB</strong> y su stock solo estará visible para ser solicitado por <strong>Farmacia Dispensa</strong>.
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => { setSubTab('mb_stock'); playBeep('beep'); }}
+                  className="px-2.5 py-1 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-[10px] font-bold shrink-0 transition"
+                >
+                  Ver Stock MB →
+                </button>
+              </div>
+            )}
+          </div>
+
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
             
             {/* Control Panel: File Upload */}
             <div className="space-y-5">
               <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-5 shadow-sm space-y-4">
                 <h3 className="font-sans font-bold text-sm text-zinc-900 dark:text-zinc-50 border-b border-zinc-100 dark:border-zinc-800 pb-2 flex items-center gap-1.5">
-                  <Upload size={14} className="text-orange-500" />
-                  <span>{lang === 'es' ? 'Subir Planilla / Remito' : 'Upload Municipal Receipt'}</span>
+                  <Upload size={14} className={receiptOrigin === 'MB' ? 'text-blue-500' : 'text-emerald-500'} />
+                  <span>
+                    {receiptOrigin === 'MB'
+                      ? (lang === 'es' ? 'Subir Remito MB (Provincial)' : 'Upload MB Delivery Slip')
+                      : (lang === 'es' ? 'Subir Remito Municipal' : 'Upload Municipal Receipt')}
+                  </span>
                 </h3>
                 
                 <p className="text-[11px] text-zinc-500 leading-relaxed dark:text-zinc-400">
-                  {lang === 'es' 
-                    ? 'Sube el remito de egreso de depósito municipal en formato CSV (procesado 100% en tu dispositivo de forma local y gratuita).' 
-                    : 'Upload the delivery slip received from the central laboratory as a CSV file (processed 100% locally on your device for free).'}
+                  {receiptOrigin === 'MB'
+                    ? (lang === 'es'
+                        ? 'Carga el remito oficial de entrega del programa Medicamentos Bonaerenses en CSV para incorporar los lotes identificados.'
+                        : 'Upload the official delivery CSV from the Bonaerenses Meds program to register labeled batches.')
+                    : (lang === 'es' 
+                        ? 'Sube el remito de egreso de depósito municipal en formato CSV (procesado 100% en tu dispositivo de forma local y gratuita).' 
+                        : 'Upload the delivery slip received from the central laboratory as a CSV file (processed 100% locally on your device for free).')}
                 </p>
 
                 {/* Drag and Drop Zone */}
@@ -2476,22 +2930,28 @@ const handleCreateOrUpdateUser = (e: React.FormEvent) => {
                       handleReceiptFileUpload(file);
                     }
                   }}
-                  className={`border-2 border-dashed rounded-xl p-8 text-center transition ${receiptDragOver ? 'border-orange-500 bg-orange-50/20' : 'border-zinc-200 dark:border-zinc-800 hover:border-zinc-300 dark:hover:border-zinc-700'}`}
+                  className={`border-2 border-dashed rounded-xl p-8 text-center transition ${
+                    receiptDragOver 
+                      ? (receiptOrigin === 'MB' ? 'border-blue-500 bg-blue-50/20' : 'border-emerald-500 bg-emerald-50/20') 
+                      : 'border-zinc-200 dark:border-zinc-800 hover:border-zinc-300 dark:hover:border-zinc-700'
+                  }`}
                 >
                   <label htmlFor="receipt-file-upload" className="cursor-pointer space-y-3 block">
-                    <div className="size-10 bg-orange-500/10 text-orange-600 rounded-full flex items-center justify-center mx-auto mb-1">
+                    <div className={`size-10 rounded-full flex items-center justify-center mx-auto mb-1 ${
+                      receiptOrigin === 'MB' ? 'bg-blue-500/10 text-blue-600' : 'bg-emerald-500/10 text-emerald-600'
+                    }`}>
                       <Upload size={20} />
                     </div>
                     <span className="block text-xs font-bold text-zinc-700 dark:text-zinc-300">
                       {lang === 'es' ? 'Arrastra remito aquí o haz click' : 'Drag file here or click to browse'}
                     </span>
                     <span className="block text-[9px] text-zinc-400">
-                      {lang === 'es' ? 'Únicamente archivos CSV (.csv) • Máx 20MB' : 'CSV files only (.csv) • Max 20MB'}
+                      {lang === 'es' ? 'Planillas Excel (.xlsx, .xls) o CSV (.csv) • Procesamiento local • Máx 20MB' : 'Excel (.xlsx, .xls) or CSV (.csv) spreadsheets • Local parsing • Max 20MB'}
                     </span>
                     <input 
                       id="receipt-file-upload"
                       type="file"
-                      accept=".csv"
+                      accept=".xlsx,.xls,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,text/csv"
                       className="hidden"
                       onChange={(e) => {
                         const file = e.target.files?.[0];
@@ -2503,16 +2963,47 @@ const handleCreateOrUpdateUser = (e: React.FormEvent) => {
                   </label>
                 </div>
 
-                {/* Botón de Plantilla CSV */}
-                <div className="pt-1.5 flex justify-center">
-                  <button
-                    type="button"
-                    onClick={handleDownloadCSVTemplate}
-                    className="flex items-center gap-1.5 px-3 py-1.5 bg-zinc-50 dark:bg-zinc-950/55 hover:bg-zinc-100 dark:hover:bg-zinc-800/80 border border-zinc-200 dark:border-zinc-850 rounded-xl text-[10px] font-bold text-zinc-600 dark:text-zinc-400 transition cursor-pointer"
-                  >
-                    <FileSpreadsheet size={13} className="text-emerald-500" />
-                    <span>{lang === 'es' ? 'Descargar Plantilla CSV' : 'Download CSV Template'}</span>
-                  </button>
+                {/* Botones de Plantillas (Excel y CSV) según origen */}
+                <div className="pt-1.5 flex flex-wrap gap-2">
+                  {receiptOrigin === 'MB' ? (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => downloadRemitoTemplate('MB', 'xlsx')}
+                        className="flex-1 min-w-[130px] flex items-center justify-center gap-1.5 px-3 py-2 bg-blue-50 dark:bg-blue-950/40 hover:bg-blue-100 dark:hover:bg-blue-900/50 border border-blue-200 dark:border-blue-800 rounded-xl text-[10px] font-bold text-blue-700 dark:text-blue-300 transition cursor-pointer"
+                      >
+                        <FileSpreadsheet size={13} className="text-blue-500" />
+                        <span>{lang === 'es' ? 'Plantilla MB Excel (.xlsx)' : 'MB Excel Template (.xlsx)'}</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => downloadRemitoTemplate('MB', 'csv')}
+                        className="flex-1 min-w-[130px] flex items-center justify-center gap-1.5 px-3 py-2 bg-zinc-50 dark:bg-zinc-800/60 hover:bg-zinc-100 dark:hover:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-xl text-[10px] font-bold text-zinc-700 dark:text-zinc-300 transition cursor-pointer"
+                      >
+                        <FileSpreadsheet size={13} className="text-zinc-500" />
+                        <span>{lang === 'es' ? 'Plantilla MB CSV (.csv)' : 'MB CSV Template (.csv)'}</span>
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => downloadRemitoTemplate('Muni', 'xlsx')}
+                        className="flex-1 min-w-[130px] flex items-center justify-center gap-1.5 px-3 py-2 bg-emerald-50 dark:bg-emerald-950/40 hover:bg-emerald-100 dark:hover:bg-emerald-900/50 border border-emerald-200 dark:border-emerald-800 rounded-xl text-[10px] font-bold text-emerald-700 dark:text-emerald-300 transition cursor-pointer"
+                      >
+                        <FileSpreadsheet size={13} className="text-emerald-500" />
+                        <span>{lang === 'es' ? 'Plantilla Municipal Excel (.xlsx)' : 'Municipal Excel Template (.xlsx)'}</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => downloadRemitoTemplate('Muni', 'csv')}
+                        className="flex-1 min-w-[130px] flex items-center justify-center gap-1.5 px-3 py-2 bg-zinc-50 dark:bg-zinc-800/60 hover:bg-zinc-100 dark:hover:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-xl text-[10px] font-bold text-zinc-700 dark:text-zinc-300 transition cursor-pointer"
+                      >
+                        <FileSpreadsheet size={13} className="text-zinc-500" />
+                        <span>{lang === 'es' ? 'Plantilla Municipal CSV (.csv)' : 'Municipal CSV Template (.csv)'}</span>
+                      </button>
+                    </>
+                  )}
                 </div>
 
                 {isProcessingReceipt && (
@@ -2700,20 +3191,27 @@ const handleCreateOrUpdateUser = (e: React.FormEvent) => {
             {/* Results Preview and Confirmation Panel */}
             <div className="lg:col-span-2">
               <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-5 shadow-sm space-y-4">
-                <div className="flex items-center justify-between border-b border-zinc-100 dark:border-zinc-800 pb-2">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-zinc-100 dark:border-zinc-800 pb-3 gap-2">
                   <div className="space-y-0.5">
                     <h3 className="font-sans font-bold text-sm text-zinc-900 dark:text-zinc-50 flex items-center gap-1.5">
-                      <FileCheck2 size={15} className="text-emerald-500" />
-                      <span>{lang === 'es' ? 'Previsualización de Remito Detectado' : 'Detected delivery slip summary'}</span>
+                      <FileCheck2 size={16} className="text-emerald-500" />
+                      <span>{lang === 'es' ? 'Previsualización y Verificación de Remito' : 'Receipt Preview and Verification'}</span>
                     </h3>
                     {receiptFileName && (
-                      <p className="text-[9px] font-mono text-zinc-400">{receiptFileName}</p>
+                      <p className="text-[10px] font-mono text-zinc-400 truncate max-w-md">{receiptFileName}</p>
                     )}
                   </div>
                   {receiptItems.length > 0 && (
-                    <span className="bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-[10px] font-bold px-2 py-0.5 rounded-full font-mono">
-                      {receiptItems.length} {lang === 'es' ? 'unids' : 'items'}
-                    </span>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-[10px] font-bold px-2 py-0.5 rounded-full font-mono">
+                        {receiptItems.filter(i => (i.quantity || 0) > 0).length} {lang === 'es' ? 'con entrega' : 'delivered'}
+                      </span>
+                      {receiptItems.some(i => !i.quantity || i.quantity <= 0) && (
+                        <span className="bg-amber-500/10 text-amber-600 dark:text-amber-400 text-[10px] font-bold px-2 py-0.5 rounded-full font-mono">
+                          {receiptItems.filter(i => !i.quantity || i.quantity <= 0).length} {lang === 'es' ? 'no entregados (0 u)' : 'undelivered'}
+                        </span>
+                      )}
+                    </div>
                   )}
                 </div>
 
@@ -2724,115 +3222,766 @@ const handleCreateOrUpdateUser = (e: React.FormEvent) => {
                     </p>
                     <p className="text-[10px] max-w-sm mx-auto">
                       {lang === 'es' 
-                        ? 'Sube la foto o planilla en el panel lateral para iniciar el procesamiento automático utilizando el modelo Gemini.' 
-                        : 'Upload the deliveries worksheet or screenshot in the left card to parse with high fidelity.'}
+                        ? 'Sube la planilla Excel (.xlsx, .xls) o CSV en el panel lateral para iniciar la verificación automática y separación de pedidos y remitos.' 
+                        : 'Upload the deliveries spreadsheet in the left card to parse and cross-check quantities.'}
                     </p>
                   </div>
-                ) : (
-                  <div className="space-y-4">
-                    <div className="overflow-x-auto border border-zinc-100 dark:border-zinc-800 rounded-xl">
-                      <table className="w-full text-left font-sans text-[11px] border-collapse">
-                        <thead>
-                          <tr className="bg-zinc-50 dark:bg-zinc-950 text-zinc-500 font-bold border-b border-zinc-150 dark:border-zinc-800/60">
-                            <th className="py-2.5 px-3">{lang === 'es' ? 'Artículo / Fármaco' : 'Item Label'}</th>
-                            <th className="py-2.5 px-2">{lang === 'es' ? 'Presentación' : 'Presentation'}</th>
-                            <th className="py-2.5 px-2">{lang === 'es' ? 'Cant. a Ingresar' : 'Received Qty'}</th>
-                            <th className="py-2.5 px-2 font-mono">Lote</th>
-                            <th className="py-2.5 px-2 font-mono font-sans">Vto</th>
-                            <th className="py-2.5 px-3 text-right">{lang === 'es' ? 'Asociar / Emparejar con Catálogo' : 'Map with Catalog'}</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800/50">
-                          {receiptItems.map((item, idx) => {
-                            return (
-                              <tr key={idx} className="hover:bg-zinc-50/55 dark:hover:bg-zinc-950/20 transition">
-                                <td className="py-2.5 px-3 font-bold text-zinc-800 dark:text-zinc-200">
-                                  {item.name}
-                                </td>
-                                <td className="py-2.5 px-2 text-zinc-500 font-medium">
-                                  {item.presentation}
-                                </td>
-                                <td className="py-2.5 px-2 font-bold text-orange-600 font-mono">
-                                  +{item.quantity} u
-                                </td>
-                                <td className="py-2.5 px-2 font-mono font-medium text-indigo-500">
-                                  {item.batchCode}
-                                </td>
-                                <td className="py-2.5 px-2 font-mono text-zinc-400">
-                                  {item.expirationDate}
-                                </td>
-                                <td className="py-2.5 px-3 text-right">
-                                  <div className="flex flex-col gap-1 items-end">
-                                    <select
-                                      id={`receipt-item-select-${idx}`}
-                                      value={item.productId || ""}
-                                      onChange={(e) => {
-                                        const val = e.target.value;
-                                        setReceiptItems(prev => prev.map((itm, i) => i === idx ? { ...itm, productId: val || undefined } : itm));
-                                      }}
-                                      className="text-[10px] py-1 px-1.5 border border-zinc-200 dark:border-zinc-800 rounded bg-white dark:bg-zinc-900 text-zinc-800 dark:text-zinc-100 max-w-[200px] truncate focus:outline-none focus:ring-1 focus:ring-orange-500 font-sans"
-                                    >
-                                      <option value="">🆕 {lang === 'es' ? 'Crear como nuevo insumo' : 'Create as new supply'}</option>
-                                      {products.map(p => (
-                                        <option key={p.id} value={p.id}>
-                                          {p.name} ({p.presentation})
-                                        </option>
-                                      ))}
-                                    </select>
-                                    
-                                    {item.productId ? (
-                                      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[8px] font-bold bg-green-500/10 text-green-500" title="Coincide con un artículo en tu catálogo de farmacia">
-                                        <span className="size-1 bg-green-500 rounded-full"></span>
-                                        {lang === 'es' ? 'Emparejado (Suma Stock)' : 'Matched (Increments Stock)'}
-                                      </span>
-                                    ) : (
-                                      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[8px] font-bold bg-amber-500/10 text-amber-500" title="Se creará un nuevo artículo en tu catálogo con este lote">
-                                        <span className="size-1 bg-amber-500 rounded-full animate-pulse"></span>
-                                        🆕 {lang === 'es' ? 'Nuevo Insumo' : 'New Insumo'}
-                                      </span>
-                                    )}
-                                  </div>
+                ) : (() => {
+                  const deliveredCount = receiptItems.filter(i => (i.quantity || 0) > 0).length;
+                  const undeliveredCount = receiptItems.filter(i => !i.quantity || i.quantity <= 0).length;
+                  const selectedCount = receiptItems.filter(i => i.selected !== false && (i.quantity || 0) > 0).length;
+                  const totalUnits = receiptItems
+                    .filter(i => i.selected !== false && (i.quantity || 0) > 0)
+                    .reduce((sum, i) => sum + (Number(i.quantity) || 0), 0);
+
+                  const filteredItems = receiptItems.filter(item => {
+                    const isDeliv = (item.quantity || 0) > 0;
+                    if (receiptFilter === 'delivered' && !isDeliv) return false;
+                    if (receiptFilter === 'undelivered' && isDeliv) return false;
+
+                    if (receiptSearchTerm.trim()) {
+                      const q = receiptSearchTerm.toLowerCase().trim();
+                      const matchN = item.name.toLowerCase().includes(q);
+                      const matchP = item.presentation.toLowerCase().includes(q);
+                      const matchB = item.batchCode.toLowerCase().includes(q);
+                      return matchN || matchP || matchB;
+                    }
+                    return true;
+                  });
+
+                  const allFilteredSelected = filteredItems.length > 0 && filteredItems.every(i => i.selected !== false && (i.quantity || 0) > 0);
+
+                  return (
+                    <div className="space-y-3">
+                      {/* Notice Banner when Pedido vs Remito has undelivered items */}
+                      {undeliveredCount > 0 && (
+                        <div className="bg-amber-50 dark:bg-amber-950/30 border border-amber-200/80 dark:border-amber-800/50 rounded-xl p-3 flex items-start gap-2.5">
+                          <AlertCircle size={16} className="text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+                          <div className="text-[11px] text-amber-900 dark:text-amber-200 leading-relaxed">
+                            <span className="font-bold">
+                              {lang === 'es' ? 'Atención - Documento con Pedido y Remito Municipal:' : 'Municipal Order vs Delivery Slip detected:'}
+                            </span>{' '}
+                            {lang === 'es'
+                              ? `Se detectaron ${deliveredCount} insumos con entrega efectiva y ${undeliveredCount} insumos que figuran en el pedido municipal pero con 0 unidades remitidas por el depósito. Los no entregados se desmarcaron automáticamente para no inflar tu stock.`
+                              : `Found ${deliveredCount} delivered items and ${undeliveredCount} requested items that were not delivered (0 units). Undelivered items have been excluded from import.`}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Navigation tabs & search filter */}
+                      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 pt-1">
+                        <div className="flex items-center gap-1.5 p-1 bg-zinc-100 dark:bg-zinc-800/70 rounded-xl">
+                          <button
+                            type="button"
+                            onClick={() => setReceiptFilter('delivered')}
+                            className={`px-3 py-1 text-[11px] font-bold rounded-lg transition cursor-pointer flex items-center gap-1.5 ${
+                              receiptFilter === 'delivered'
+                                ? 'bg-white dark:bg-zinc-900 text-emerald-600 dark:text-emerald-400 shadow-xs'
+                                : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-200'
+                            }`}
+                          >
+                            <PackageCheck size={13} />
+                            <span>{lang === 'es' ? 'A Ingresar al Stock' : 'To Import'} ({deliveredCount})</span>
+                          </button>
+
+                          {undeliveredCount > 0 && (
+                            <button
+                              type="button"
+                              onClick={() => setReceiptFilter('undelivered')}
+                              className={`px-3 py-1 text-[11px] font-bold rounded-lg transition cursor-pointer flex items-center gap-1.5 ${
+                                receiptFilter === 'undelivered'
+                                  ? 'bg-white dark:bg-zinc-900 text-amber-600 dark:text-amber-400 shadow-xs'
+                                  : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-200'
+                              }`}
+                            >
+                              <PackageX size={13} />
+                              <span>{lang === 'es' ? 'No Entregados / Pedido Muni' : 'Undelivered'} ({undeliveredCount})</span>
+                            </button>
+                          )}
+
+                          <button
+                            type="button"
+                            onClick={() => setReceiptFilter('all')}
+                            className={`px-3 py-1 text-[11px] font-bold rounded-lg transition cursor-pointer ${
+                              receiptFilter === 'all'
+                                ? 'bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100 shadow-xs'
+                                : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-200'
+                            }`}
+                          >
+                            <span>{lang === 'es' ? 'Todos' : 'All'} ({receiptItems.length})</span>
+                          </button>
+                        </div>
+
+                        {/* Search in receipt */}
+                        <div className="relative w-full sm:w-56">
+                          <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-zinc-400" />
+                          <input
+                            type="text"
+                            value={receiptSearchTerm}
+                            onChange={(e) => setReceiptSearchTerm(e.target.value)}
+                            placeholder={lang === 'es' ? 'Buscar medicamento...' : 'Search item...'}
+                            className="w-full text-[11px] pl-7 pr-2.5 py-1 bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-lg focus:outline-none focus:ring-1 focus:ring-emerald-500 font-sans"
+                          />
+                        </div>
+                      </div>
+
+                      {/* Items Table */}
+                      <div className="overflow-x-auto border border-zinc-150 dark:border-zinc-800 rounded-xl">
+                        <table className="w-full text-left font-sans text-[11px] border-collapse">
+                          <thead>
+                            <tr className="bg-zinc-50 dark:bg-zinc-950 text-zinc-600 dark:text-zinc-400 font-bold border-b border-zinc-200 dark:border-zinc-800 text-[10px] uppercase tracking-wider">
+                              <th className="py-2.5 px-3 w-8 text-center">
+                                <input
+                                  type="checkbox"
+                                  checked={allFilteredSelected}
+                                  onChange={(e) => {
+                                    const checked = e.target.checked;
+                                    setReceiptItems(prev => prev.map(item => {
+                                      const matches = filteredItems.includes(item);
+                                      if (matches) {
+                                        return { ...item, selected: checked && (item.quantity || 0) > 0 };
+                                      }
+                                      return item;
+                                    }));
+                                  }}
+                                  title={lang === 'es' ? 'Seleccionar / Deseleccionar visibles' : 'Toggle visible'}
+                                  className="rounded border-zinc-300 text-emerald-600 focus:ring-emerald-500 cursor-pointer"
+                                />
+                              </th>
+                              <th className="py-2.5 px-2">{lang === 'es' ? 'Medicamento / Insumo' : 'Product Label'}</th>
+                              <th className="py-2.5 px-2">{lang === 'es' ? 'Presentación' : 'Presentation'}</th>
+                              <th className="py-2.5 px-2 text-center">{lang === 'es' ? 'Cant. Remitida' : 'Qty'}</th>
+                              <th className="py-2.5 px-2">{lang === 'es' ? 'Lote' : 'Batch'}</th>
+                              <th className="py-2.5 px-2">{lang === 'es' ? 'Vencimiento' : 'Expiry'}</th>
+                              <th className="py-2.5 px-2">{lang === 'es' ? 'Asociar Catálogo' : 'Catalog Match'}</th>
+                              <th className="py-2.5 px-2 text-center w-10"></th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800/60">
+                            {filteredItems.length === 0 ? (
+                              <tr>
+                                <td colSpan={8} className="py-8 text-center text-zinc-400 text-xs">
+                                  {lang === 'es' ? 'No se encontraron insumos con este filtro.' : 'No items match this filter.'}
                                 </td>
                               </tr>
-                            );
-                          })}
-                        </tbody>
-                      </table>
-                    </div>
+                            ) : (
+                              filteredItems.map((item) => {
+                                const realIdx = receiptItems.indexOf(item);
+                                const isDeliv = (item.quantity || 0) > 0;
+                                const isChecked = item.selected !== false && isDeliv;
 
-                    <div className="flex flex-col sm:flex-row justify-between items-center bg-zinc-50 dark:bg-zinc-950/40 p-3 rounded-xl border border-zinc-150/40 dark:border-zinc-850 gap-3">
-                      <div className="text-[10px] text-zinc-500">
-                        {lang === 'es' 
-                          ? 'Al presionar "Ingresar Stock", los insumos señalados como "Existente" añadirán esta tanda de lote y cantidad bajo el estándar FEFO. Los insumos "Nuevos" se agregarán al catálogo automáticamente.' 
-                          : 'Validating and committing imports merges quantities and batch profiles keeping FEFO logs aligned.'}
+                                return (
+                                  <tr 
+                                    key={realIdx} 
+                                    className={`transition ${
+                                      !isDeliv 
+                                        ? 'bg-amber-500/5 dark:bg-amber-500/5 opacity-80' 
+                                        : isChecked 
+                                          ? 'hover:bg-emerald-500/5 dark:hover:bg-emerald-500/5' 
+                                          : 'hover:bg-zinc-50 dark:hover:bg-zinc-950/20 opacity-60'
+                                    }`}
+                                  >
+                                    {/* Select Checkbox */}
+                                    <td className="py-2 px-3 text-center">
+                                      <input
+                                        type="checkbox"
+                                        checked={isChecked}
+                                        disabled={!isDeliv}
+                                        onChange={(e) => {
+                                          const checked = e.target.checked;
+                                          setReceiptItems(prev => prev.map((itm, i) => i === realIdx ? { ...itm, selected: checked } : itm));
+                                        }}
+                                        className="rounded border-zinc-300 text-emerald-600 focus:ring-emerald-500 cursor-pointer disabled:opacity-30"
+                                      />
+                                    </td>
+
+                                    {/* Medication Name */}
+                                    <td className="py-2 px-2">
+                                      <div className="space-y-0.5 max-w-xs">
+                                        <div className="flex items-center gap-1.5 flex-wrap">
+                                          <span className="font-bold text-zinc-900 dark:text-zinc-100">
+                                            {item.name}
+                                          </span>
+                                          {receiptOrigin === 'MB' ? (
+                                            <span className="px-1.5 py-0.2 rounded text-[8px] font-mono font-bold bg-blue-100 dark:bg-blue-900/60 text-blue-700 dark:text-blue-300">
+                                              🏛️ MB
+                                            </span>
+                                          ) : (
+                                            <span className="px-1.5 py-0.2 rounded text-[8px] font-mono font-bold bg-emerald-100 dark:bg-emerald-900/60 text-emerald-700 dark:text-emerald-300">
+                                              🏙️ Muni
+                                            </span>
+                                          )}
+                                        </div>
+
+                                        {item.statusNote && (
+                                          <p className="text-[9px] text-amber-600 dark:text-amber-400 font-medium">
+                                            {item.statusNote}
+                                          </p>
+                                        )}
+                                      </div>
+                                    </td>
+
+                                    {/* Presentation */}
+                                    <td className="py-2 px-2 text-zinc-600 dark:text-zinc-400 text-[10px]">
+                                      {item.presentation || '—'}
+                                    </td>
+
+                                    {/* Quantity */}
+                                    <td className="py-2 px-2 text-center">
+                                      <div className="inline-flex flex-col items-center">
+                                        <div className="flex items-center gap-1">
+                                          <input
+                                            type="number"
+                                            min="0"
+                                            value={item.quantity}
+                                            onChange={(e) => {
+                                              const val = Math.max(0, parseInt(e.target.value) || 0);
+                                              setReceiptItems(prev => prev.map((itm, i) => 
+                                                i === realIdx 
+                                                  ? { ...itm, quantity: val, isDelivered: val > 0, selected: val > 0 } 
+                                                  : itm
+                                              ));
+                                            }}
+                                            className={`w-16 px-1.5 py-0.5 text-center text-xs font-mono font-bold border rounded focus:outline-none ${
+                                              isDeliv
+                                                ? 'border-emerald-300 dark:border-emerald-700 bg-white dark:bg-zinc-900 text-emerald-600 dark:text-emerald-400 focus:ring-1 focus:ring-emerald-500'
+                                                : 'border-zinc-300 dark:border-zinc-700 bg-zinc-100 dark:bg-zinc-800 text-zinc-400'
+                                            }`}
+                                          />
+                                          <span className="text-[9px] font-mono text-zinc-400">u</span>
+                                        </div>
+
+                                        {/* Cross-check with requested Muni quantity */}
+                                        {item.requestedQuantity !== undefined && item.requestedQuantity > 0 && (
+                                          <div className="text-[9px] font-mono mt-0.5 whitespace-nowrap">
+                                            <span className="text-zinc-400">Ped: {item.requestedQuantity} u</span>
+                                            {item.quantity < item.requestedQuantity ? (
+                                              <span className="text-red-500 font-bold ml-1">
+                                                (Falta {item.requestedQuantity - item.quantity})
+                                              </span>
+                                            ) : item.quantity > item.requestedQuantity ? (
+                                              <span className="text-blue-500 font-bold ml-1">
+                                                (+{item.quantity - item.requestedQuantity})
+                                              </span>
+                                            ) : (
+                                              <span className="text-emerald-600 font-medium ml-1">✓</span>
+                                            )}
+                                          </div>
+                                        )}
+                                      </div>
+                                    </td>
+
+                                    {/* Batch */}
+                                    <td className="py-2 px-2">
+                                      <input
+                                        type="text"
+                                        value={item.batchCode}
+                                        onChange={(e) => {
+                                          const val = e.target.value.toUpperCase();
+                                          setReceiptItems(prev => prev.map((itm, i) => i === realIdx ? { ...itm, batchCode: val } : itm));
+                                        }}
+                                        placeholder="LOTE"
+                                        className="w-24 px-1.5 py-0.5 text-[10px] font-mono border border-zinc-200 dark:border-zinc-800 rounded bg-white dark:bg-zinc-900 text-indigo-600 dark:text-indigo-400 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                                      />
+                                    </td>
+
+                                    {/* Expiration */}
+                                    <td className="py-2 px-2">
+                                      <input
+                                        type="text"
+                                        value={item.expirationDate}
+                                        onChange={(e) => {
+                                          const val = e.target.value;
+                                          setReceiptItems(prev => prev.map((itm, i) => i === realIdx ? { ...itm, expirationDate: val } : itm));
+                                        }}
+                                        placeholder="YYYY-MM-DD"
+                                        className="w-24 px-1.5 py-0.5 text-[10px] font-mono border border-zinc-200 dark:border-zinc-800 rounded bg-white dark:bg-zinc-900 text-zinc-600 dark:text-zinc-400 focus:outline-none focus:ring-1 focus:ring-zinc-500"
+                                      />
+                                    </td>
+
+                                    {/* Catalog Match Selector */}
+                                    <td className="py-2 px-2">
+                                      <div className="flex flex-col gap-0.5 max-w-[190px]">
+                                        <select
+                                          value={item.productId || ""}
+                                          onChange={(e) => {
+                                            const val = e.target.value;
+                                            setReceiptItems(prev => prev.map((itm, i) => i === realIdx ? { ...itm, productId: val || undefined } : itm));
+                                          }}
+                                          className="text-[10px] py-1 px-1.5 border border-zinc-200 dark:border-zinc-800 rounded bg-white dark:bg-zinc-900 text-zinc-800 dark:text-zinc-100 truncate focus:outline-none focus:ring-1 focus:ring-emerald-500 font-sans"
+                                        >
+                                          <option value="">🆕 {lang === 'es' ? 'Crear como nuevo insumo' : 'Create as new supply'}</option>
+                                          {products.map(p => (
+                                            <option key={p.id} value={p.id}>
+                                              {p.name} ({p.presentation})
+                                            </option>
+                                          ))}
+                                        </select>
+                                        
+                                        {item.productId ? (
+                                          <span className="inline-flex items-center gap-1 text-[8px] font-bold text-emerald-600 dark:text-emerald-400">
+                                            <span className="size-1 bg-emerald-500 rounded-full"></span>
+                                            {lang === 'es' ? 'Emparejado con catálogo' : 'Catalog match'}
+                                          </span>
+                                        ) : (
+                                          <span className="inline-flex items-center gap-1 text-[8px] font-bold text-amber-600 dark:text-amber-400">
+                                            <span className="size-1 bg-amber-500 rounded-full"></span>
+                                            🆕 {lang === 'es' ? 'Nuevo insumo' : 'New supply'}
+                                          </span>
+                                        )}
+                                      </div>
+                                    </td>
+
+                                    {/* Remove row */}
+                                    <td className="py-2 px-2 text-center">
+                                      <button
+                                        type="button"
+                                        onClick={() => setReceiptItems(prev => prev.filter((_, i) => i !== realIdx))}
+                                        className="p-1 text-zinc-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-950/40 rounded transition cursor-pointer"
+                                        title={lang === 'es' ? 'Quitar fila del remito' : 'Remove row'}
+                                      >
+                                        <Trash2 size={13} />
+                                      </button>
+                                    </td>
+                                  </tr>
+                                );
+                              })
+                            )}
+                          </tbody>
+                        </table>
                       </div>
 
-                      <div className="flex gap-2 shrink-0">
-                        <button
-                          type="button"
-                          onClick={() => { setReceiptItems([]); setReceiptFileName(''); }}
-                          className="py-2 px-3 hover:bg-zinc-150 dark:hover:bg-zinc-800 text-zinc-500 font-bold font-sans rounded-xl cursor-pointer"
-                        >
-                          {lang === 'es' ? 'Limpiar' : 'Discard'}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={handleConfirmReceiptImport}
-                          className="py-2 px-4 bg-emerald-600 hover:bg-emerald-700 text-white font-bold font-sans rounded-xl shadow-md cursor-pointer flex items-center gap-1.5 transition"
-                        >
-                          <FileCheck2 size={14} />
-                          <span>{lang === 'es' ? 'Ingresar Stock a Depósito' : 'Import Stock now'}</span>
-                        </button>
+                      {/* Confirmation and Action footer */}
+                      <div className="flex flex-col sm:flex-row justify-between items-center bg-zinc-50 dark:bg-zinc-950/40 p-3.5 rounded-xl border border-zinc-150/60 dark:border-zinc-800 gap-3">
+                        <div className="text-[10px] text-zinc-500 space-y-0.5">
+                          <p className="font-medium">
+                            {lang === 'es' 
+                              ? `Se ingresarán ${selectedCount} insumos seleccionados (${totalUnits} unidades físicas). Lotes registrados bajo estándar FEFO.` 
+                              : `Ready to commit ${selectedCount} selected items (${totalUnits} physical units) with FEFO tracking.`}
+                          </p>
+                          {undeliveredCount > 0 && (
+                            <p className="text-amber-600 dark:text-amber-400">
+                              ℹ️ {undeliveredCount} insumos con 0 u no afectarán el stock de farmacia.
+                            </p>
+                          )}
+                        </div>
+
+                        <div className="flex gap-2 shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => { setReceiptItems([]); setReceiptFileName(''); }}
+                            className="py-2 px-3 hover:bg-zinc-200/60 dark:hover:bg-zinc-800 text-zinc-600 dark:text-zinc-400 font-bold font-sans rounded-xl cursor-pointer text-xs"
+                          >
+                            {lang === 'es' ? 'Descartar' : 'Discard'}
+                          </button>
+                          <button
+                            type="button"
+                            disabled={selectedCount === 0}
+                            onClick={handleConfirmReceiptImport}
+                            className="py-2 px-4 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-bold font-sans rounded-xl shadow-sm cursor-pointer flex items-center gap-1.5 transition text-xs"
+                          >
+                            <FileCheck2 size={15} />
+                            <span>
+                              {lang === 'es' 
+                                ? `Ingresar Stock (${selectedCount} insumos / +${totalUnits} u)` 
+                                : `Import Stock (${selectedCount} items)`}
+                            </span>
+                          </button>
+                        </div>
                       </div>
                     </div>
-                  </div>
-                )}
+                  );
+                })()}
               </div>
             </div>
 
           </div>
         </div>
       )}
+
+      {subTab === 'mb_stock' && (() => {
+        const today = new Date();
+        
+        // Filtrar productos que son del programa MB o tienen lotes MB
+        const mbProducts = products.filter(
+          p => p.programOrigin === 'MB' || p.batches.some(b => b.origin === 'MB')
+        );
+
+        // Aplanar todos los lotes MB para calcular métricas
+        const allMbBatches = mbProducts.flatMap(p => 
+          p.batches
+            .filter(b => b.origin === 'MB' || (!b.origin && p.programOrigin === 'MB'))
+            .map(b => {
+              const expDate = new Date(b.expirationDate);
+              const diffDays = Math.ceil((expDate.getTime() - today.getTime()) / (1000 * 3600 * 24));
+              let status: 'Optimo' | 'Alerta' | 'Critico' | 'Vencido' = 'Optimo';
+              if (diffDays < 0) status = 'Vencido';
+              else if (diffDays <= 60) status = 'Critico';
+              else if (diffDays <= 180) status = 'Alerta';
+              return { ...b, product: p, diffDays, status };
+            })
+        );
+
+        const totalMbUnits = allMbBatches.reduce((acc, b) => acc + b.quantity, 0);
+        const countOptimo = allMbBatches.filter(b => b.status === 'Optimo').length;
+        const countAlerta = allMbBatches.filter(b => b.status === 'Alerta').length;
+        const countCritico = allMbBatches.filter(b => b.status === 'Critico').length;
+        const countVencido = allMbBatches.filter(b => b.status === 'Vencido').length;
+
+        // Filtrado interactivo
+        const filteredProducts = mbProducts.filter(p => {
+          const matchesQuery = mbSearchQuery.trim() === '' ||
+            p.name.toLowerCase().includes(mbSearchQuery.toLowerCase()) ||
+            p.presentation.toLowerCase().includes(mbSearchQuery.toLowerCase()) ||
+            p.batches.some(b => b.batchCode.toLowerCase().includes(mbSearchQuery.toLowerCase()));
+
+          if (!matchesQuery) return false;
+
+          if (mbFilterStatus === 'All') return true;
+
+          const pBatches = p.batches.filter(b => b.origin === 'MB' || (!b.origin && p.programOrigin === 'MB'));
+          return pBatches.some(b => {
+            const expDate = new Date(b.expirationDate);
+            const diffDays = Math.ceil((expDate.getTime() - today.getTime()) / (1000 * 3600 * 24));
+            if (mbFilterStatus === 'Vencido') return diffDays < 0;
+            if (mbFilterStatus === 'Critico') return diffDays >= 0 && diffDays <= 60;
+            if (mbFilterStatus === 'Alerta') return diffDays > 60 && diffDays <= 180;
+            if (mbFilterStatus === 'Optimo') return diffDays > 180;
+            return true;
+          });
+        });
+
+        return (
+          <div className="space-y-6 animate-fade-in text-xs font-sans">
+            
+            {/* Header del Programa MB */}
+            <div className="bg-gradient-to-r from-blue-900 via-indigo-900 to-slate-900 text-white rounded-2xl p-6 shadow-md relative overflow-hidden border border-blue-800/60">
+              <div className="absolute top-0 right-0 transform translate-x-4 -translate-y-4 opacity-10">
+                <Landmark size={200} />
+              </div>
+
+              <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-4">
+                <div className="space-y-1.5">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="bg-blue-800/80 border border-blue-600/50 text-blue-200 text-[10px] px-3 py-1 rounded-full font-mono font-bold uppercase tracking-wider inline-flex items-center gap-1.5">
+                      <Landmark size={12} />
+                      PROGRAMA PROVINCIAL
+                    </span>
+                    <span className="bg-amber-500/20 border border-amber-400/40 text-amber-300 text-[10px] px-3 py-1 rounded-full font-bold inline-flex items-center gap-1">
+                      🔒 Único Cliente Autorizado: Farmacia Dispensa
+                    </span>
+                  </div>
+
+                  <h2 className="text-xl sm:text-2xl font-extrabold tracking-tight text-white flex items-center gap-2">
+                    <span>Medicamentos Bonaerenses (MB)</span>
+                  </h2>
+                  <p className="text-xs text-blue-200/80 max-w-2xl font-sans leading-relaxed">
+                    Monitoreo y trazabilidad central de stock provincial, control de lotes con fechas de vencimiento y remitos de ingreso.
+                  </p>
+                </div>
+
+                <div className="flex flex-wrap gap-2.5 shrink-0">
+                  <button
+                    type="button"
+                    onClick={handleExportMBStockReport}
+                    className="px-3.5 py-2 bg-white/10 hover:bg-white/20 text-white rounded-xl font-bold transition flex items-center gap-1.5 border border-white/20 cursor-pointer text-xs"
+                  >
+                    <FileSpreadsheet size={14} className="text-emerald-400" />
+                    <span>Exportar Reporte (CSV)</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setReceiptOrigin('MB');
+                      setSubTab('receipt');
+                      playBeep('beep');
+                    }}
+                    className="px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded-xl font-bold transition flex items-center gap-1.5 shadow-md shadow-blue-500/20 cursor-pointer text-xs"
+                  >
+                    <Upload size={14} />
+                    <span>+ Subir Remito MB</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* Tarjetas de Métricas de MB */}
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+              <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl p-3.5 shadow-sm space-y-1">
+                <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider block">Fármacos MB</span>
+                <p className="text-xl font-extrabold text-blue-600 dark:text-blue-400 font-mono">{mbProducts.length}</p>
+                <span className="text-[9px] text-zinc-400 block">en catálogo provincial</span>
+              </div>
+
+              <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl p-3.5 shadow-sm space-y-1">
+                <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider block">Stock Total MB</span>
+                <p className="text-xl font-extrabold text-emerald-600 dark:text-emerald-400 font-mono">{totalMbUnits} u</p>
+                <span className="text-[9px] text-zinc-400 block">unidades físicas</span>
+              </div>
+
+              <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl p-3.5 shadow-sm space-y-1">
+                <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider block">Lotes Óptimos</span>
+                <p className="text-xl font-extrabold text-green-600 dark:text-green-400 font-mono">{countOptimo}</p>
+                <span className="text-[9px] text-green-600/80 block">&gt; 6 meses vigentes</span>
+              </div>
+
+              <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl p-3.5 shadow-sm space-y-1">
+                <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider block">Alerta (2-6m)</span>
+                <p className="text-xl font-extrabold text-amber-500 font-mono">{countAlerta}</p>
+                <span className="text-[9px] text-amber-600/80 block">rotación preventiva</span>
+              </div>
+
+              <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl p-3.5 shadow-sm space-y-1">
+                <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider block">Críticos (&lt;60d)</span>
+                <p className="text-xl font-extrabold text-orange-600 font-mono">{countCritico}</p>
+                <span className="text-[9px] text-orange-600/80 block">vencimiento cercano</span>
+              </div>
+
+              <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl p-3.5 shadow-sm space-y-1">
+                <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider block">Vencidos</span>
+                <p className="text-xl font-extrabold text-red-600 font-mono">{countVencido}</p>
+                <span className="text-[9px] text-red-600/80 block">para baja / descarte</span>
+              </div>
+            </div>
+
+            {/* Barra de Filtros y Búsqueda */}
+            <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-4 shadow-sm space-y-3">
+              <div className="flex flex-col sm:flex-row gap-3 items-center justify-between">
+                <div className="relative w-full sm:w-80">
+                  <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400" />
+                  <input
+                    type="text"
+                    placeholder="Buscar por medicamento, presentación o lote..."
+                    value={mbSearchQuery}
+                    onChange={(e) => setMbSearchQuery(e.target.value)}
+                    className="w-full pl-9 pr-3 py-2 text-xs border border-zinc-200 dark:border-zinc-800 rounded-xl bg-zinc-50 dark:bg-zinc-950 focus:outline-none focus:ring-1 focus:ring-blue-500 text-zinc-900 dark:text-zinc-100"
+                  />
+                  {mbSearchQuery && (
+                    <button
+                      type="button"
+                      onClick={() => setMbSearchQuery('')}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-600"
+                    >
+                      <X size={12} />
+                    </button>
+                  )}
+                </div>
+
+                <div className="flex flex-wrap gap-1.5 w-full sm:w-auto">
+                  {(['All', 'Optimo', 'Alerta', 'Critico', 'Vencido'] as const).map(status => (
+                    <button
+                      key={status}
+                      type="button"
+                      onClick={() => { setMbFilterStatus(status); playBeep('beep'); }}
+                      className={`px-3 py-1.5 rounded-lg text-[11px] font-bold transition cursor-pointer ${
+                        mbFilterStatus === status
+                          ? 'bg-blue-600 text-white shadow-sm'
+                          : 'bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 hover:bg-zinc-200 dark:hover:bg-zinc-700'
+                      }`}
+                    >
+                      {status === 'All' && 'Todos los Lotes'}
+                      {status === 'Optimo' && '🟢 Óptimos (>6m)'}
+                      {status === 'Alerta' && '🟡 Alerta (2-6m)'}
+                      {status === 'Critico' && '🔴 Críticos (<60d)'}
+                      {status === 'Vencido' && '🚨 Vencidos'}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {/* Tabla de Medicamentos y Lotes MB */}
+            <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl shadow-sm overflow-hidden">
+              <div className="p-4 border-b border-zinc-100 dark:border-zinc-800 flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Landmark size={15} className="text-blue-500" />
+                  <h3 className="font-bold text-sm text-zinc-900 dark:text-zinc-100">
+                    Stock y Vencimiento de Lotes MB ({filteredProducts.length} medicamentos)
+                  </h3>
+                </div>
+
+                <span className="text-[10px] text-zinc-400 font-mono">
+                  Orden de despacho FEFO (First Expired, First Out)
+                </span>
+              </div>
+
+              {filteredProducts.length === 0 ? (
+                <div className="p-12 text-center space-y-3">
+                  <div className="size-12 bg-blue-50 dark:bg-blue-950/40 text-blue-500 rounded-full flex items-center justify-center mx-auto">
+                    <Landmark size={24} />
+                  </div>
+                  <p className="font-bold text-sm text-zinc-700 dark:text-zinc-300">
+                    {mbSearchQuery || mbFilterStatus !== 'All' 
+                      ? 'No se encontraron medicamentos con los filtros aplicados' 
+                      : 'Aún no hay medicamentos cargados bajo el programa MB'}
+                  </p>
+                  <p className="text-xs text-zinc-400 max-w-md mx-auto">
+                    Puedes subir el remito oficial de entrega del programa Medicamentos Bonaerenses para cargar el stock automáticamente.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setReceiptOrigin('MB');
+                      setSubTab('receipt');
+                      playBeep('beep');
+                    }}
+                    className="mt-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl text-xs transition"
+                  >
+                    + Cargar Primer Remito MB
+                  </button>
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs border-collapse">
+                    <thead>
+                      <tr className="bg-zinc-50 dark:bg-zinc-950 text-zinc-500 font-bold border-b border-zinc-200 dark:border-zinc-800 text-[11px]">
+                        <th className="py-3 px-4">Medicamento / Presentación</th>
+                        <th className="py-3 px-3">Lotes MB Registrados</th>
+                        <th className="py-3 px-3">Stock MB</th>
+                        <th className="py-3 px-3">Próximo Vencimiento</th>
+                        <th className="py-3 px-3">Estado FEFO</th>
+                        <th className="py-3 px-4 text-right">Cliente Autorizado</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800/60">
+                      {filteredProducts.map(p => {
+                        const mbBatches = p.batches
+                          .filter(b => b.origin === 'MB' || (!b.origin && p.programOrigin === 'MB'))
+                          .sort((a, b) => new Date(a.expirationDate).getTime() - new Date(b.expirationDate).getTime());
+
+                        const totalStockMB = mbBatches.reduce((acc, b) => acc + b.quantity, 0);
+                        const earliestBatch = mbBatches[0];
+
+                        const expDate = earliestBatch ? new Date(earliestBatch.expirationDate) : null;
+                        const diffDays = expDate ? Math.ceil((expDate.getTime() - today.getTime()) / (1000 * 3600 * 24)) : 9999;
+
+                        return (
+                          <tr key={p.id} className="hover:bg-blue-50/20 dark:hover:bg-blue-950/10 transition">
+                            <td className="py-3.5 px-4">
+                              <div className="space-y-0.5">
+                                <div className="flex items-center gap-1.5">
+                                  <span className="font-extrabold text-zinc-900 dark:text-zinc-100 text-xs">
+                                    {p.name}
+                                  </span>
+                                  <span className="px-1.5 py-0.2 rounded text-[9px] font-mono font-bold bg-blue-100 dark:bg-blue-900/60 text-blue-700 dark:text-blue-300">
+                                    MB
+                                  </span>
+                                </div>
+                                <p className="text-[11px] text-zinc-500 font-medium">{p.presentation}</p>
+                                <span className="text-[9px] text-zinc-400 font-mono">ID: {p.id}</span>
+                              </div>
+                            </td>
+
+                            <td className="py-3.5 px-3">
+                              <div className="space-y-1.5 max-w-xs">
+                                {mbBatches.length === 0 ? (
+                                  <span className="text-[10px] text-zinc-400 italic">Sin lotes activos</span>
+                                ) : (
+                                  mbBatches.map(b => {
+                                    const bExp = new Date(b.expirationDate);
+                                    const bDiff = Math.ceil((bExp.getTime() - today.getTime()) / (1000 * 3600 * 24));
+                                    
+                                    let badgeColor = 'bg-green-50 dark:bg-green-950/30 text-green-700 dark:text-green-400 border-green-200 dark:border-green-800';
+                                    if (bDiff < 0) {
+                                      badgeColor = 'bg-red-50 dark:bg-red-950/30 text-red-700 dark:text-red-400 border-red-200 dark:border-red-800';
+                                    } else if (bDiff <= 60) {
+                                      badgeColor = 'bg-orange-50 dark:bg-orange-950/30 text-orange-700 dark:text-orange-400 border-orange-200 dark:border-orange-800';
+                                    } else if (bDiff <= 180) {
+                                      badgeColor = 'bg-amber-50 dark:bg-amber-950/30 text-amber-700 dark:text-amber-400 border-amber-200 dark:border-amber-800';
+                                    }
+
+                                    return (
+                                      <div 
+                                        key={b.id || b.batchCode}
+                                        className={`p-1.5 rounded-lg border text-[10px] flex items-center justify-between gap-2 ${badgeColor}`}
+                                      >
+                                        <div>
+                                          <span className="font-mono font-bold">{b.batchCode}</span>
+                                          {b.receiptNumber && (
+                                            <span className="text-[9px] text-zinc-400 block font-sans">
+                                              {b.receiptNumber}
+                                            </span>
+                                          )}
+                                        </div>
+                                        <div className="text-right">
+                                          <span className="font-mono font-bold block">{b.quantity} u</span>
+                                          <span className="text-[9px] opacity-80">
+                                            {b.expirationDate} ({bDiff < 0 ? 'Vencido' : `${bDiff}d`})
+                                          </span>
+                                        </div>
+                                      </div>
+                                    );
+                                  })
+                                )}
+                              </div>
+                            </td>
+
+                            <td className="py-3.5 px-3">
+                              <div className="space-y-0.5">
+                                <span className="font-mono font-extrabold text-sm text-blue-600 dark:text-blue-400">
+                                  {totalStockMB} u
+                                </span>
+                                <span className="text-[9px] text-zinc-400 block">disponible MB</span>
+                              </div>
+                            </td>
+
+                            <td className="py-3.5 px-3">
+                              {earliestBatch ? (
+                                <div className="space-y-0.5 font-mono">
+                                  <span className="font-bold text-zinc-800 dark:text-zinc-200 text-xs block">
+                                    {earliestBatch.expirationDate}
+                                  </span>
+                                  <span className={`text-[10px] font-bold ${
+                                    diffDays < 0 ? 'text-red-600' : diffDays <= 60 ? 'text-orange-600' : diffDays <= 180 ? 'text-amber-600' : 'text-green-600'
+                                  }`}>
+                                    {diffDays < 0 
+                                      ? `Vencido hace ${Math.abs(diffDays)} días` 
+                                      : `${diffDays} días restantes`}
+                                  </span>
+                                </div>
+                              ) : (
+                                <span className="text-zinc-400 italic text-[11px]">N/D</span>
+                              )}
+                            </td>
+
+                            <td className="py-3.5 px-3">
+                              {diffDays < 0 ? (
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300">
+                                  🚨 Vencido (Baja)
+                                </span>
+                              ) : diffDays <= 60 ? (
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-orange-100 text-orange-700 dark:bg-orange-950 dark:text-orange-300">
+                                  🔴 Despacho Inmediato
+                                </span>
+                              ) : diffDays <= 180 ? (
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300">
+                                  🟡 Próxima Salida
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-green-100 text-green-700 dark:bg-green-950 dark:text-green-300">
+                                  🟢 Óptimo
+                                </span>
+                              )}
+                            </td>
+
+                            <td className="py-3.5 px-4 text-right">
+                              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl text-[10px] font-bold bg-blue-50 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800">
+                                🔒 Farmacia Dispensa
+                              </span>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+
+          </div>
+        );
+      })()}
 
       {subTab === 'mapping' && (
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6 animate-fade-in text-xs">
@@ -2887,7 +4036,9 @@ const handleCreateOrUpdateUser = (e: React.FormEvent) => {
               🔗 {lang === 'es' ? 'Visibilidad Cruzada de Insumos' : 'Service Stock Mapping'}
             </h3>
             <p className="text-[11px] text-zinc-400 mb-2">
-              Asigna qué gabinetes están habilitados para ver y pedir cada medicamento del inventario central. Los marcados como compartidos se enlazan automáticamente.
+              {lang === 'es' 
+                ? 'Habilita o deshabilita en qué sectores del CAPS se puede ver y solicitar cada insumo. La categoría base se sincroniza automáticamente con tus selecciones.' 
+                : 'Manage which CAPS services can see and order each item. The base category automatically synchronizes with your selections.'}
             </p>
 
             {/* Buscador de Visibilidad Cruzada */}
@@ -2916,7 +4067,18 @@ const handleCreateOrUpdateUser = (e: React.FormEvent) => {
               {filteredMappingProducts.map(p => (
                 <div key={p.id} className="py-2 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                   <div>
-                    <p className="font-bold text-zinc-800 dark:text-zinc-200">{p.name}</p>
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <p className="font-bold text-zinc-800 dark:text-zinc-200">{p.name}</p>
+                      <span className={`px-1.5 py-0.2 rounded text-[9px] font-bold font-mono ${
+                        p.category === 'Compartido' || (p.allowedServices && p.allowedServices.length > 1)
+                          ? 'bg-purple-100 dark:bg-purple-950/40 text-purple-700 dark:text-purple-300 border border-purple-200/40'
+                          : 'bg-orange-100 dark:bg-orange-950/40 text-orange-850 dark:text-orange-300 border border-orange-200/40'
+                      }`}>
+                        {p.category === 'Compartido' || (p.allowedServices && p.allowedServices.length > 1)
+                          ? `🔗 Compartido (${(p.allowedServices || []).length})`
+                          : `📍 ${p.category}`}
+                      </span>
+                    </div>
                     <p className="text-[10px] text-zinc-400 font-mono">{p.presentation} • Base: {p.category}</p>
                   </div>
 
@@ -3438,23 +4600,6 @@ const handleCreateOrUpdateUser = (e: React.FormEvent) => {
                   </button>
                 </div>
 
-                {/* Filtro de Sala/Servicio */}
-                <div className="flex items-center gap-2 max-w-xs">
-                  <label className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider whitespace-nowrap">
-                    {lang === 'es' ? 'Sala:' : 'Ward:'}
-                  </label>
-                  <select
-                    value={consumptionServiceFilter}
-                    onChange={(e) => setConsumptionServiceFilter(e.target.value)}
-                    className="w-full p-1.5 bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-xl text-xs text-zinc-800 dark:text-zinc-100 font-medium focus:ring-1 focus:ring-orange-500 cursor-pointer"
-                  >
-                    <option value="ALL">{lang === 'es' ? 'Todas las salas' : 'All wards'}</option>
-                    <option value={PredefinedService.GUARDIA}>Guardia</option>
-                    <option value={PredefinedService.IRAB}>IRAB</option>
-                    <option value={PredefinedService.LABORATORIO}>Laboratorio</option>
-                    <option value={PredefinedService.FARMACIA}>Farmacia</option>
-                  </select>
-                </div>
                 {/* Filtro de Búsqueda de la Planilla */}
                 <div className="p-1 bg-zinc-50 dark:bg-zinc-950 rounded-xl border border-zinc-150 dark:border-zinc-850 max-w-md flex items-center gap-2">
                   <span className="text-zinc-400 pl-2">🔍</span>

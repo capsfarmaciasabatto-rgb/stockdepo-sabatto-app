@@ -5,8 +5,8 @@
 
 import React, { useState, useMemo } from 'react';
 import { translations } from '../../translations';
-import { User, Product, Order, OrderItem, PredefinedService, ServiceConfiguration, normalizeServiceName } from '../../types';
-import { Send, FileWarning, Search, ClipboardList, Info, Sparkles, CheckCircle2, AlertTriangle, ChevronDown, ChevronUp } from 'lucide-react';
+import { User, Product, Order, OrderItem, PredefinedService, ServiceConfiguration, MedicationOrigin } from '../../types';
+import { Send, FileWarning, Search, ClipboardList, Info, Sparkles, CheckCircle2, AlertTriangle, ChevronDown, ChevronUp, Landmark, Building2 } from 'lucide-react';
 import { playBeep } from '../../lib/sound';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -39,20 +39,12 @@ export default function EnfermeroView({
   const [searchQuery, setSearchQuery] = useState('');
   const [successBanner, setSuccessBanner] = useState(false);
   const [productTypeFilter, setProductTypeFilter] = useState<'All' | 'Med' | 'PM'>('All');
+  const [originFilter, setOriginFilter] = useState<'All' | 'MB' | 'Muni'>('All');
   const [expandedOrderId, setExpandedOrderId] = useState<string | null>(null);
 
   const t = translations[lang];
-  const inferServiceFromEmail = (email: string): string => {
-  if (!email) return PredefinedService.GUARDIA;
-  const lowerEmail = email.toLowerCase();
-  if (lowerEmail.includes('guardia')) return PredefinedService.GUARDIA;
-  if (lowerEmail.includes('laboratorio')) return PredefinedService.LABORATORIO;
-  if (lowerEmail.includes('irab')) return PredefinedService.IRAB;
-  if (lowerEmail.includes('farmacia')) return PredefinedService.FARMACIA;
-  return PredefinedService.GUARDIA;
-};
-
-const service = currentUser.service || inferServiceFromEmail(currentUser.email) || PredefinedService.GUARDIA;
+  const service = currentUser.service || PredefinedService.GUARDIA;
+  const isFarmacia = service === PredefinedService.FARMACIA;
 
   // Encontrar configuración semanal para este servicio
   const config = useMemo(() => {
@@ -68,33 +60,15 @@ const service = currentUser.service || inferServiceFromEmail(currentUser.email) 
     return todayNum === config.orderDay;
   }, [config]);
 
-  // FIX: Filtrar productos asignados a este servicio o compartidos
-  // Se normaliza la comparación para evitar problemas de mayúsculas/minúsculas/espacios
+  // Filtrar productos asignados a este servicio o compartidos
+  // Para Guardia, Laboratorio e IRAB, NUNCA verán fármacos exclusivos de MB (allowedServices solo contiene Farmacia)
   const allowedProducts = useMemo(() => {
-    // Normalizar el servicio del usuario (mayúsculas, sin espacios)
-    const userService = normalizeServiceName(service);
-    
     return products.filter(p => {
-      // 1. Primero revisar allowedServices (fuente de verdad)
-      if (Array.isArray(p.allowedServices)) {
-        if (p.allowedServices.length > 0) {
-          // Comparar normalizando cada servicio permitido
-          return p.allowedServices.some(
-            allowed => normalizeServiceName(allowed) === userService
-          );
-        }
-        // FIX: Si allowedServices es [] vacío, asumir COMPARTIDO (retrocompatibilidad)
-        return true;
+      if (Array.isArray(p.allowedServices) && p.allowedServices.length > 0) {
+        return p.allowedServices.includes(service);
       }
-      
-      // 2. Fallback: usar la categoría del producto
-      const prodCategory = normalizeServiceName(p.category);
-      
-      if (prodCategory === 'COMPARTIDO') {
-        return true;
-      }
-      
-      return prodCategory === userService;
+      if (p.category === 'Compartido') return true;
+      return p.category === service;
     });
   }, [products, service]);
 
@@ -103,12 +77,22 @@ const service = currentUser.service || inferServiceFromEmail(currentUser.email) 
     if (productTypeFilter !== 'All') {
       list = list.filter(p => (p.productType || 'Med') === productTypeFilter);
     }
+    // Si es Farmacia Dispensa, puede filtrar por origen (MB vs Muni)
+    if (isFarmacia && originFilter !== 'All') {
+      list = list.filter(p => {
+        const hasMB = p.programOrigin === 'MB' || p.batches.some(b => b.origin === 'MB');
+        const hasMuni = p.programOrigin === 'Muni' || p.batches.some(b => (b.origin || 'Muni') === 'Muni');
+        if (originFilter === 'MB') return hasMB;
+        if (originFilter === 'Muni') return hasMuni;
+        return true;
+      });
+    }
     if (!searchQuery.trim()) return list;
     return list.filter(p =>
       p.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
       p.presentation.toLowerCase().includes(searchQuery.toLowerCase())
     );
-  }, [allowedProducts, searchQuery, productTypeFilter]);
+  }, [allowedProducts, searchQuery, productTypeFilter, originFilter, isFarmacia]);
 
   const handleQtyChange = (productId: string, val: string) => {
     // Permitir solo números enteros o vacío
@@ -140,20 +124,32 @@ const service = currentUser.service || inferServiceFromEmail(currentUser.email) 
     }
 
     const orderItems: OrderItem[] = [];
+    let hasMBItems = false;
+    let hasMuniItems = false;
+
     Object.entries(quantities).forEach(([pId, qtyStr]) => {
       const q = parseInt(qtyStr as string);
       if (q > 0) {
         const prod = products.find(p => p.id === pId);
         if (prod) {
+          const itemOrigin: MedicationOrigin = (prod.programOrigin === 'MB' || prod.batches.some(b => b.origin === 'MB')) ? 'MB' : 'Muni';
+          if (itemOrigin === 'MB') hasMBItems = true;
+          if (itemOrigin === 'Muni') hasMuniItems = true;
+
           orderItems.push({
             productId: prod.id,
             productName: prod.name,
             presentation: prod.presentation,
-            requestedQuantity: q
+            requestedQuantity: q,
+            origin: itemOrigin
           });
         }
       }
     });
+
+    const calculatedProgram: MedicationOrigin | 'Todos' = (hasMBItems && hasMuniItems) 
+      ? 'Todos' 
+      : (hasMBItems ? 'MB' : 'Muni');
 
     const newOrder: Order = {
       id: `ord_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`,
@@ -166,6 +162,7 @@ const service = currentUser.service || inferServiceFromEmail(currentUser.email) 
       requestDate: new Date().toISOString(),
       status: 'Pendiente',
       type: orderType,
+      program: calculatedProgram,
       items: orderItems,
       notes: notes.trim()
     };
@@ -203,15 +200,21 @@ const service = currentUser.service || inferServiceFromEmail(currentUser.email) 
         </div>
         <div className="relative z-10 space-y-2">
           <span className="bg-slate-800 border border-slate-700 text-slate-300 text-xs px-3 py-1 rounded-full font-mono font-bold uppercase tracking-wider">
-            {lang === 'es' ? 'Portal de Enfermería' : 'Nursing Portal'}
+            {isFarmacia 
+              ? (lang === 'es' ? 'Portal de Pedidos — Farmacia Dispensa' : 'Orders Portal — Pharmacy Dispensing')
+              : (lang === 'es' ? `Portal de Solicitudes — ${service}` : `${service} Order Portal`)}
           </span>
           <h2 className="text-xl sm:text-2xl font-extrabold tracking-tight">
             {lang === 'es' ? `Servicio: ${service}` : `Service: ${service}`}
           </h2>
           <p className="text-xs text-slate-400 max-w-2xl font-sans leading-relaxed">
-            {lang === 'es' 
-              ? 'Área para solicitar medicamentos y descartables de tu gabinete al depósito. Elige insumos, cantidades y envía tu pedido.'
-              : 'Add medicines and disposables for your specific cabinet to request stock from local deposit.'
+            {isFarmacia
+              ? (lang === 'es' 
+                  ? 'Área exclusiva para que el personal de Farmacia Dispensa solicite reposición de medicamentos e insumos al depósito central del CAPS. Solo disponible para Farmacia dispensa.'
+                  : 'Exclusive area for Pharmacy Dispensing staff to request stock replenishment from central CAPS warehouse. Restricted to Farmacia Dispensa.')
+              : (lang === 'es' 
+                  ? 'Área para solicitar medicamentos y descartables de tu gabinete al depósito. Elige insumos, cantidades y envía tu pedido.'
+                  : 'Add medicines and disposables for your specific cabinet to request stock from local deposit.')
             }
           </p>
         </div>
@@ -296,6 +299,32 @@ const service = currentUser.service || inferServiceFromEmail(currentUser.email) 
         </div>
       )}
 
+      {/* Banner institucional exclusivo para Farmacia Dispensa */}
+      {isFarmacia && (
+        <div className="bg-gradient-to-r from-blue-50 via-sky-50/70 to-indigo-50/50 dark:from-blue-950/30 dark:via-sky-950/20 dark:to-indigo-950/20 border border-blue-200 dark:border-blue-900/40 rounded-2xl p-4.5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-xs">
+          <div className="flex items-center gap-3">
+            <div className="size-10 rounded-xl bg-blue-600 text-white flex items-center justify-center shrink-0 shadow-sm">
+              <Landmark size={20} />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <h3 className="font-bold text-xs text-blue-950 dark:text-blue-100 font-sans">
+                  {lang === 'es' ? 'Sector Habilitado: Medicamentos Bonaerenses (MB)' : 'Authorized Service: Medicamentos Bonaerenses (MB)'}
+                </h3>
+                <span className="px-2 py-0.5 bg-blue-600 text-white text-[9px] font-extrabold rounded-full font-mono">
+                  {lang === 'es' ? 'Cliente Exclusivo' : 'Exclusive Client'}
+                </span>
+              </div>
+              <p className="text-[11px] text-zinc-600 dark:text-zinc-400 mt-0.5">
+                {lang === 'es'
+                  ? 'Farmacia Dispensa es el único sector del CAPS autorizado para consultar stock y formular pedidos de fármacos del programa provincial MB.'
+                  : 'Dispensing Pharmacy is the only service authorized to check stock and place orders for MB provincial supplies.'}
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Formulario de Armado de Pedidos */}
       <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl shadow-sm overflow-hidden transition-colors">
         <div className="px-6 py-4 bg-zinc-50 dark:bg-zinc-900/50 border-b border-zinc-200 dark:border-zinc-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -303,6 +332,35 @@ const service = currentUser.service || inferServiceFromEmail(currentUser.email) 
             {t.prepareOrder}
           </h3>
           <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 w-full sm:w-auto">
+            {/* Filtro por Programa / Origen (Exclusivo Farmacia Dispensa) */}
+            {isFarmacia && (
+              <div className="flex items-center bg-blue-50/60 dark:bg-blue-950/20 p-0.5 rounded-lg border border-blue-200/60 dark:border-blue-800/40 self-start sm:self-auto">
+                <button
+                  type="button"
+                  onClick={() => setOriginFilter('All')}
+                  className={`px-2 py-1 rounded text-[10px] font-bold cursor-pointer transition ${originFilter === 'All' ? 'bg-blue-600 text-white shadow-xs' : 'text-blue-900 dark:text-blue-300'}`}
+                >
+                  {lang === 'es' ? 'Todos' : 'All'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setOriginFilter('MB')}
+                  className={`px-2 py-1 rounded text-[10px] font-bold cursor-pointer transition flex items-center gap-1 ${originFilter === 'MB' ? 'bg-blue-600 text-white shadow-xs' : 'text-blue-900 dark:text-blue-300'}`}
+                >
+                  <Landmark size={11} />
+                  <span>MB</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setOriginFilter('Muni')}
+                  className={`px-2 py-1 rounded text-[10px] font-bold cursor-pointer transition flex items-center gap-1 ${originFilter === 'Muni' ? 'bg-blue-600 text-white shadow-xs' : 'text-blue-900 dark:text-blue-300'}`}
+                >
+                  <Building2 size={11} />
+                  <span>Muni</span>
+                </button>
+              </div>
+            )}
+
             {/* Botones de filtro de Tipo de Insumo */}
             <div className="flex items-center bg-zinc-100 dark:bg-zinc-800 p-0.5 rounded-lg border border-zinc-200/50 dark:border-zinc-700/50 self-start sm:self-auto">
               <button
@@ -350,24 +408,59 @@ const service = currentUser.service || inferServiceFromEmail(currentUser.email) 
               {t.noProductsForService}
             </div>
           ) : (
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 max-h-[420px] overflow-y-auto pr-2">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 max-h-[440px] overflow-y-auto pr-2">
               {filteredProducts.map((prod) => {
                 const qtyVal = quantities[prod.id] || '';
                 const isChecked = parseInt(qtyVal) > 0;
                 
+                const isMBItem = prod.programOrigin === 'MB' || prod.batches.some(b => b.origin === 'MB');
+                const totalStock = prod.batches.reduce((acc, b) => acc + b.quantity, 0);
+                const activeBatchesSorted = [...prod.batches]
+                  .filter(b => b.quantity > 0)
+                  .sort((a, b) => new Date(a.expirationDate).getTime() - new Date(b.expirationDate).getTime());
+                const nextExpBatch = activeBatchesSorted[0];
+                
                 return (
                   <div
                     key={prod.id}
-                    className={`p-4 border rounded-xl flex items-center justify-between gap-3 transition-all ${isChecked ? 'bg-orange-50/40 dark:bg-orange-950/10 border-orange-500/50 ring-1 ring-orange-500/20' : 'bg-transparent border-slate-200 dark:border-slate-800 hover:border-slate-300'}`}
+                    className={`p-4 border rounded-xl flex items-center justify-between gap-3 transition-all ${isChecked ? 'bg-orange-50/40 dark:bg-orange-950/10 border-orange-500/50 ring-1 ring-orange-500/20' : (isMBItem && isFarmacia ? 'bg-blue-50/15 dark:bg-blue-950/10 border-blue-200/80 dark:border-blue-900/40 hover:border-blue-300' : 'bg-transparent border-slate-200 dark:border-slate-800 hover:border-slate-300')}`}
                   >
                     <div className="space-y-1">
-                      <p className="text-xs font-bold text-zinc-900 dark:text-zinc-100 font-sans tracking-tight">
-                        {prod.name}
-                      </p>
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <p className="text-xs font-bold text-zinc-900 dark:text-zinc-100 font-sans tracking-tight">
+                          {prod.name}
+                        </p>
+                      </div>
                       <p className="text-[10px] text-zinc-400 font-mono">
                         {prod.presentation}
                       </p>
+                      
+                      {/* Información de Stock y Vencimiento para Farmacia Dispensa */}
+                      {isFarmacia && (
+                        <div className="text-[9px] font-mono text-zinc-500 dark:text-zinc-400 flex items-center gap-2 pt-0.5">
+                          <span>Stock Central: <strong className="text-zinc-800 dark:text-zinc-200">{totalStock} u</strong></span>
+                          {nextExpBatch && (
+                            <span className="text-zinc-400">
+                              • Vto: <strong className="text-zinc-700 dark:text-zinc-300">{nextExpBatch.expirationDate}</strong>
+                            </span>
+                          )}
+                        </div>
+                      )}
+
                       <div className="flex flex-wrap gap-1 items-center pt-0.5">
+                        {/* Badge de Procedencia MB vs Muni */}
+                        {isMBItem ? (
+                          <span className="inline-flex items-center gap-0.5 px-1.5 py-0.2 rounded text-[8px] font-extrabold bg-blue-600/10 text-blue-700 dark:text-blue-300 border border-blue-500/20">
+                            <Landmark size={9} />
+                            <span>MB Bonaerenses</span>
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-0.5 px-1.5 py-0.2 rounded text-[8px] font-extrabold bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 border border-zinc-200 dark:border-zinc-700">
+                            <Building2 size={9} />
+                            <span>Muni</span>
+                          </span>
+                        )}
+
                         <span className={`inline-flex items-center px-1.5 py-0.2 rounded text-[8px] font-extrabold ${
                           (prod.productType || 'Med') === 'PM' 
                             ? 'bg-blue-500/10 text-blue-600 dark:text-blue-450 border border-blue-500/10' 
@@ -375,6 +468,7 @@ const service = currentUser.service || inferServiceFromEmail(currentUser.email) 
                         }`}>
                           {(prod.productType || 'Med') === 'PM' ? '📦 PM' : '💊 MED'}
                         </span>
+
                         {prod.category === 'Compartido' && (
                           <span className="inline-block text-[8px] bg-zinc-100 dark:bg-zinc-800 text-zinc-500 px-1.5 py-0.2 rounded font-bold font-mono">
                             {lang === 'es' ? 'Compartido' : 'Shared'}
@@ -383,7 +477,7 @@ const service = currentUser.service || inferServiceFromEmail(currentUser.email) 
                       </div>
                     </div>
 
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 shrink-0">
                       <input
                         id={`input-qty-${prod.id}`}
                         type="text"
